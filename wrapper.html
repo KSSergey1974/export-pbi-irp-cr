@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Страница-обёртка: проверка postMessage</title>
+<link rel="stylesheet" href="probe.css">
+</head>
+<body>
+<header class="band">
+  <p class="band__title">Страница-обёртка: проверка postMessage</p>
+  <p class="band__sub">Отчёт открывается внутри этой страницы. В пробнике нажмите «PING обёртки», затем «Отправить пакет».</p>
+</header>
+
+<form class="linkbar" id="linkbar">
+  <label for="report-url">Ссылка Publish to web</label>
+  <input id="report-url" type="url" placeholder="https://app.powerbi.com/view?r=…" autocomplete="off" required>
+  <button class="btn btn--primary" type="submit">Открыть отчёт</button>
+</form>
+
+<div class="split">
+  <div class="split__report">
+    <p class="empty" id="empty">Вставьте ссылку тестового отчёта и нажмите «Открыть отчёт».</p>
+    <iframe id="report" title="Отчёт Power BI" allowfullscreen hidden></iframe>
+  </div>
+  <aside aria-label="Журнал сообщений">
+    <h2 class="h2">Журнал сообщений</h2>
+    <ol class="log" id="log" aria-live="polite"></ol>
+    <section id="preview-wrap" hidden>
+      <h2 class="h2">Первые строки последнего пакета</h2>
+      <div class="scroller" id="preview"></div>
+    </section>
+  </aside>
+</div>
+
+<script type="module">
+import { TYPES, decodePacked, fmtInt, fmtBytes, stamp, renderPreview } from "./probe-lib.js";
+
+const form = document.getElementById("linkbar");
+const input = document.getElementById("report-url");
+const frame = document.getElementById("report");
+const empty = document.getElementById("empty");
+const logList = document.getElementById("log");
+const previewWrap = document.getElementById("preview-wrap");
+const preview = document.getElementById("preview");
+
+function addEntry(kind, title, detail) {
+  const li = document.createElement("li");
+  li.className = "log__item log__item--" + kind;
+  const t = document.createElement("p");
+  t.className = "log__title";
+  t.textContent = title;
+  li.appendChild(t);
+  if (detail) {
+    const d = document.createElement("p");
+    d.textContent = detail;
+    li.appendChild(d);
+  }
+  const time = document.createElement("p");
+  time.className = "log__time";
+  time.textContent = stamp();
+  li.appendChild(time);
+  logList.insertBefore(li, logList.firstChild);
+}
+
+function acceptable(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol === "https:") return true;
+    return u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1");
+  } catch {
+    return false;
+  }
+}
+
+function openReport(url) {
+  if (!acceptable(url)) {
+    addEntry("warn", "Ссылка не принята", "Нужен полный адрес вида https://app.powerbi.com/view?r=…");
+    return;
+  }
+  frame.src = url;
+  frame.hidden = false;
+  empty.hidden = true;
+  history.replaceState(null, "", "?report=" + encodeURIComponent(url));
+  addEntry("info", "Отчёт загружается", "Когда он откроется, нажмите в пробнике «PING обёртки».");
+}
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  openReport(input.value.trim());
+});
+
+const fromQuery = new URLSearchParams(location.search).get("report");
+if (fromQuery) {
+  input.value = fromQuery;
+  openReport(fromQuery);
+}
+
+if (window.top !== window) {
+  addEntry("warn", "Эта страница сама открыта во фрейме",
+    "Пробник обращается к самому верхнему окну, поэтому PING до этой страницы не дойдёт. Откройте её напрямую.");
+}
+
+window.addEventListener("message", async (e) => {
+  const d = e.data;
+  if (!d || typeof d !== "object") return;
+
+  if (d.type === TYPES.PING) {
+    if (e.source) e.source.postMessage({ type: TYPES.PONG, nonce: d.nonce }, "*");
+    addEntry("ok", "PING от пробника получен, PONG отправлен",
+      `Источник сообщения: ${e.origin} (у визуала в песочнице origin пустой — это нормально).`);
+    return;
+  }
+
+  if (d.type === TYPES.DATA) {
+    const r = await decodePacked(d);
+    if (!r.ok) {
+      addEntry("fail", "Пакет пришёл, но не раскрылся", r.error);
+      return;
+    }
+    const expected = Number(d.rows);
+    const match = !Number.isFinite(expected) || expected === r.rows;
+    addEntry(match ? "ok" : "warn",
+      `Пакет раскрыт: ${fmtInt(r.rows)} строк × ${r.cols} столбцов`,
+      `Передано ${fmtInt(r.packedLength)} симв. (${d.gz ? "gzip" : "без сжатия"}), исходный JSON ${fmtBytes(r.textBytes)}, разбор ${r.ms} мс` +
+      (match ? "." : `. Визуал сообщал о ${fmtInt(expected)} строках — расхождение.`));
+    renderPreview(preview, r.obj, 8);
+    previewWrap.hidden = false;
+  }
+});
+</script>
+</body>
+</html>

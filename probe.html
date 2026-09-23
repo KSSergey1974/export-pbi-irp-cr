@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Проверка канала launchUrl</title>
+<link rel="stylesheet" href="probe.css">
+</head>
+<body>
+<header class="band">
+  <p class="band__title">Проверка канала launchUrl</p>
+  <p class="band__sub">Эту страницу открывает пробник из отчёта Power BI. Данные приходят во фрагменте адреса и не отправляются на сервер.</p>
+</header>
+
+<main class="page">
+  <section id="verdict" class="verdict verdict--info" aria-live="polite">
+    <p class="verdict__main" id="verdict-main">Разбираю адрес…</p>
+    <p class="verdict__note" id="verdict-note"></p>
+  </section>
+
+  <dl class="facts" id="facts"></dl>
+
+  <div class="actions">
+    <button type="button" class="btn" id="copy">Скопировать протокол</button>
+  </div>
+
+  <section id="preview-wrap" hidden>
+    <h2 class="h2">Первые строки пакета</h2>
+    <div class="scroller" id="preview"></div>
+  </section>
+</main>
+
+<script type="module">
+import { parseHash, fnv1a, decodePacked, fmtInt, fmtBytes, browserName, stamp, renderPreview } from "./probe-lib.js";
+
+const verdict = document.getElementById("verdict");
+const verdictMain = document.getElementById("verdict-main");
+const verdictNote = document.getElementById("verdict-note");
+const facts = document.getElementById("facts");
+const previewWrap = document.getElementById("preview-wrap");
+const preview = document.getElementById("preview");
+const copyBtn = document.getElementById("copy");
+let protocol = "";
+
+function setVerdict(kind, main, note) {
+  verdict.className = "verdict verdict--" + kind;
+  verdictMain.textContent = main;
+  verdictNote.textContent = note || "";
+}
+
+function setFacts(pairs) {
+  facts.replaceChildren();
+  for (const [k, v] of pairs) {
+    const dt = document.createElement("dt");
+    dt.textContent = k;
+    const dd = document.createElement("dd");
+    dd.textContent = v;
+    facts.append(dt, dd);
+  }
+}
+
+async function analyze() {
+  const hrefLength = location.href.length;
+  const hashLength = location.hash.length;
+  const p = parseHash(location.hash);
+  if (p.kind !== "none") {
+    // Убираем данные из адресной строки и истории вкладки
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  const browser = browserName();
+  const when = stamp();
+  const base = [
+    ["Браузер", browser],
+    ["Длина адреса", fmtInt(hrefLength) + " симв."],
+    ["Длина фрагмента #", fmtInt(hashLength) + " симв."],
+    ["Время", when]
+  ];
+  previewWrap.hidden = true;
+
+  if (p.kind === "none") {
+    setVerdict("info", "Страница открыта без данных",
+      "Если вы нажали «Открыть страницу» в пробнике — launchUrl в этом окружении работает.");
+    setFacts(base);
+    protocol = `probe | без данных | ${browser} | ${when}`;
+    return;
+  }
+
+  if (p.kind === "bad") {
+    setVerdict("fail", "Адрес пришёл повреждённым", p.reason);
+    setFacts(base);
+    protocol = `probe | формат не распознан | ${browser} | фрагмент ${hashLength} | ${when}`;
+    return;
+  }
+
+  if (p.kind === "t") {
+    const got = p.data.length;
+    const sum = fnv1a(p.data);
+    const intact = got === p.expected && sum === p.fnv;
+    setVerdict(intact ? "ok" : "fail",
+      intact ? `Получено полностью: ${fmtInt(got)} симв.`
+             : `Данные повреждены: получено ${fmtInt(got)} из ${fmtInt(p.expected)} симв.`,
+      intact ? "Длина и контрольная сумма совпали." : `Контрольная сумма ${sum}, ожидалась ${p.fnv}.`);
+    setFacts([...base,
+      ["Синтетика: ожидалось", fmtInt(p.expected) + " симв."],
+      ["Синтетика: получено", fmtInt(got) + " симв."],
+      ["Контрольная сумма", intact ? "совпала" : "не совпала"]]);
+    protocol = `probe | синтетика ${p.expected} | ${intact ? "OK" : "ОБРЕЗАНО " + got} | ${browser} | адрес ${hrefLength} | ${when}`;
+    return;
+  }
+
+  // Реальный пакет
+  setVerdict("info", "Раскрываю пакет…", "");
+  const r = await decodePacked(p);
+  if (!r.ok) {
+    setVerdict("fail", "Пакет не раскрылся", r.error);
+    setFacts([...base, ["В адресе (base64url)", fmtInt(r.packedLength || 0) + " симв."]]);
+    protocol = `probe | реальный пакет | ОШИБКА: ${r.error} | ${browser} | адрес ${hrefLength} | ${when}`;
+    return;
+  }
+  setVerdict("ok", `Пакет раскрыт: ${fmtInt(r.rows)} строк × ${r.cols} столбцов`,
+    "Цепочка «визуал → launchUrl → страница» работает для этого объёма.");
+  setFacts([...base,
+    ["Сжатие", p.gz ? "gzip" : "нет"],
+    ["Исходный JSON", fmtBytes(r.textBytes)],
+    ["В адресе (base64url)", fmtInt(r.packedLength) + " симв."],
+    ["Время разбора", r.ms + " мс"]]);
+  renderPreview(preview, r.obj, 12);
+  previewWrap.hidden = false;
+  protocol = `probe | реальный пакет | OK ${r.rows}×${r.cols} | ${browser} | адрес ${hrefLength} | JSON ${r.textBytes} Б | ${when}`;
+}
+
+copyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(protocol);
+    copyBtn.textContent = "Протокол скопирован";
+  } catch {
+    copyBtn.textContent = "Не удалось скопировать — выделите текст вручную";
+  }
+  setTimeout(() => { copyBtn.textContent = "Скопировать протокол"; }, 2500);
+});
+
+window.addEventListener("hashchange", analyze);
+analyze();
+</script>
+</body>
+</html>
