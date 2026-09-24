@@ -213,6 +213,69 @@ function renderHead(meta, now) {
   </header>`;
 }
 
+const PIE_W = 200;              // единиц viewBox по ширине
+const PIE_H = 150;
+const PIE_MM = 50;              // ширина диаграммы на листе, мм → 1 единица = 0,25 мм
+const PIE_FONT = 7 / 72 * 25.4 / (PIE_MM / PIE_W);   // 7 пт в единицах viewBox
+
+const f1 = (x) => x.toFixed(1);
+
+/**
+ * Круговая диаграмма «МКД по статусам», как на странице отчёта: доля статуса = МКД в столбце «Всего»
+ * матрицы статусов, цвета статусов, подписи-проценты снаружи с выносками. Порядок — как в матрице,
+ * от 12 часов по часовой стрелке.
+ */
+export function renderPie(hdr) {
+  const slices = hdr.s
+    .filter((r) => r[0] && r[1] !== "Всего")
+    .map((r) => ({ color: r[0], value: Number(String(r[r.length - 2]).replace(/\s/g, "")) || 0 }))
+    .filter((x) => x.value > 0);
+  const total = slices.reduce((a, x) => a + x.value, 0);
+  if (!total) return "";
+
+  const cx = PIE_W / 2, cy = PIE_H / 2, r = 47, lr = r + 15;   // lr — радиус подписей; по краям остаётся запас
+  const shapes = [];
+  const labels = [];
+  let a0 = -Math.PI / 2;
+  for (const x of slices) {
+    const share = x.value / total;
+    const a1 = a0 + share * 2 * Math.PI;
+    if (share > 0.9999) {
+      shapes.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${esc(x.color)}"/>`);
+    } else {
+      const p0 = [cx + r * Math.cos(a0), cy + r * Math.sin(a0)];
+      const p1 = [cx + r * Math.cos(a1), cy + r * Math.sin(a1)];
+      shapes.push(`<path d="M${cx} ${cy}L${f1(p0[0])} ${f1(p0[1])}A${r} ${r} 0 ${share > 0.5 ? 1 : 0} 1 ${f1(p1[0])} ${f1(p1[1])}Z" fill="${esc(x.color)}"/>`);
+    }
+    const mid = (a0 + a1) / 2;
+    labels.push({ mid, right: Math.cos(mid) >= 0, y: cy + lr * Math.sin(mid),
+      text: (share * 100).toLocaleString("ru-RU", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%" });
+    a0 = a1;
+  }
+
+  // Подписи одной стороны раздвигаем по вертикали, чтобы мелкие доли не налезали друг на друга
+  const gap = PIE_FONT * 1.15, top = PIE_FONT * 0.7, bottom = PIE_H - PIE_FONT * 0.7;
+  for (const side of [true, false]) {
+    const ls = labels.filter((l) => l.right === side).sort((a, b) => a.y - b.y);
+    for (let i = 0; i < ls.length; i++) ls[i].y = Math.max(ls[i].y, i ? ls[i - 1].y + gap : top);
+    for (let i = ls.length - 1; i >= 0; i--) ls[i].y = Math.min(ls[i].y, i < ls.length - 1 ? ls[i + 1].y - gap : bottom);
+  }
+
+  const lines = labels.map((l) => {
+    const sx = cx + r * Math.cos(l.mid), sy = cy + r * Math.sin(l.mid);
+    const ex = cx + (r + 7) * Math.cos(l.mid), ey = cy + (r + 7) * Math.sin(l.mid);
+    const tx = cx + (l.right ? 1 : -1) * (lr + 4);
+    return `<polyline points="${f1(sx)},${f1(sy)} ${f1(ex)},${f1(ey)} ${f1(tx)},${f1(l.y)}" fill="none" stroke="#8c8c8c" stroke-width="0.6"/>` +
+      `<text x="${f1(tx + (l.right ? 2 : -2))}" y="${f1(l.y)}" text-anchor="${l.right ? "start" : "end"}" dominant-baseline="central">${esc(l.text)}</text>`;
+  }).join("");
+
+  return `<section class="card card--pie"><h2>МКД по статусам</h2>` +
+    `<svg class="pie" viewBox="0 0 ${PIE_W} ${PIE_H}" style="width:${PIE_MM}mm;height:${PIE_MM * PIE_H / PIE_W}mm" role="img" aria-label="Доли МКД по статусам">` +
+    `<g stroke="#ffffff" stroke-width="0.8">${shapes.join("")}</g>` +
+    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#b3b3b3" stroke-width="0.6"/>` +   // светлые доли не сливаются с фоном
+    `<g font-family='Arial, "Liberation Sans", sans-serif' font-size="${f1(PIE_FONT)}" fill="#262626">${lines}</g></svg></section>`;
+}
+
 function renderSummary(meta, hdr) {
   if (!meta.showSummary || !hdr) return "";
   // Показатели: подпись и значение — одна запись, между записями линия
@@ -248,7 +311,8 @@ function renderSummary(meta, hdr) {
       }</tbody></table></section>`
     : "<div></div>";
 
-  return `<div class="summary">${kpi}${st}${vr}</div>`;
+  const pie = hdr.s.length ? renderPie(hdr) || "<div></div>" : "<div></div>";
+  return `<div class="summary">${kpi}${st}${pie}${vr}</div>`;
 }
 
 function renderFilters(meta, hdr) {
@@ -318,6 +382,7 @@ function nowText() {
 export function renderDocument(p) {
   const now = nowText();
   applyPageRules(p.meta);
+  doc.dataset.paper = PAPER[p.meta.paper] ? p.meta.paper : "A4L";   // раскладка сводки зависит от формата листа
   doc.innerHTML =
     renderHead(p.meta, now) +
     renderSummary(p.meta, p.hdr) +

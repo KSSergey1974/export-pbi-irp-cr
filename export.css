@@ -101,9 +101,11 @@ body {
 .head__meta dt { color: #d0d0d0; }
 .head__meta dd { margin: 0; font-weight: 700; text-align: right; }
 
+/* Сводка как на дашборде: показатели | матрица статусов | диаграмма | виды работ.
+   Матрица и диаграмма — по своему содержимому, боковые таблички делят остаток */
 .summary {
   display: grid;
-  grid-template-columns: 1fr 2.3fr 1fr;
+  grid-template-columns: minmax(40mm, 1fr) max-content max-content minmax(40mm, 1fr);
   align-items: start;       /* высота каждой таблички — по её содержимому */
   gap: 3mm;
   margin: 3mm 0 0;
@@ -133,8 +135,17 @@ body {
 }
 
 .card h2 .note {
-  font-size: 7.5pt;
-  white-space: nowrap;
+  white-space: nowrap;      /* шрифт и начертание — как у заголовка таблички */
+}
+
+/* A4 книжная: в ряд не помещается — два столбца, диаграмма и виды работ во втором ряду */
+.doc[data-paper="A4P"] .summary {
+  grid-template-columns: minmax(0, 1fr) max-content;
+}
+
+.card--pie .pie {
+  display: block;
+  margin: 1mm auto;
 }
 
 /* таблички сводки: запись = строка, между строками — линия */
@@ -174,9 +185,11 @@ body {
   white-space: nowrap;
 }
 
+/* Внешнюю рамку матрицы даёт карточка, как у боковых табличек: крайние линии ячеек скрыты */
 .st {
   width: 100%;
   border-collapse: collapse;
+  border-style: hidden;
   font-size: 7.5pt;
 }
 
