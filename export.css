@@ -63,9 +63,10 @@ body {
 
 /* ---------- документ ---------- */
 
+/* На экране ширина таблицы та же, что при печати (область листа минус поля 0,6 мм),
+   иначе рассчитанные для печати ширины столбцов не вмещают значения */
 .doc {
-  width: var(--page-w);
-  max-width: calc(100% - 24px);
+  width: calc(var(--page-w) - 1.2mm + 16mm);
   margin: 16px auto 40px;
   padding: 8mm;
   background: var(--paper);
@@ -121,6 +122,19 @@ body {
   background: var(--head);
   font-size: 8.5pt;
   font-weight: 700;
+}
+
+/* заголовок таблички с подписью столбца значений справа */
+.card h2.split {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 2mm;
+}
+
+.card h2 .note {
+  font-size: 7.5pt;
+  white-space: nowrap;
 }
 
 /* таблички сводки: запись = строка, между строками — линия */
@@ -214,7 +228,7 @@ body {
   background: var(--head);
   font-weight: 700;
   text-align: center;
-  vertical-align: bottom;
+  vertical-align: middle;
 }
 
 .grid td {

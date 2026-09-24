@@ -231,7 +231,11 @@ function renderSummary(meta, hdr) {
       const [color, label, ...vals] = row;
       const total = !color && label === "Всего";
       const bg = color ? ` style="background:${esc(color)}"` : "";
-      const cells = vals.map((v, i) => `<td class="${i >= vals.length - 2 ? "st__all" : ""}"${bg}>${esc(v)}</td>`).join("");
+      // Цветом статуса — подпись строки и непустые ячейки МКД; ячейки ВР и пустые — белые (как в отчёте)
+      const cells = vals.map((v, i) => {
+        const fill = color && i % 2 === 0 && v !== "" ? bg : "";
+        return `<td class="${i >= vals.length - 2 ? "st__all" : ""}"${fill}>${esc(v)}</td>`;
+      }).join("");
       return `<tr class="${total ? "st__total" : ""}"><td class="st__label"${bg}>${esc(stripStatusPrefix(label))}</td>${cells}</tr>`;
     }).join("");
     st = `<section class="card"><h2>Статусы по периодам КП</h2><table class="st"><thead>${head1}${head2}</thead><tbody>${body}</tbody></table></section>`;
@@ -239,7 +243,7 @@ function renderSummary(meta, hdr) {
 
   // Виды работ: название и значение — одна строка, между строками линия
   const vr = hdr.w.length
-    ? `<section class="card"><h2>Виды работ</h2><table class="kt kt--list"><tbody>${
+    ? `<section class="card"><h2 class="split"><span>Виды работ</span><span class="note">МКД (ВР/лифтов)</span></h2><table class="kt kt--list"><tbody>${
         hdr.w.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="kt__num">${esc(v)}</td></tr>`).join("")
       }</tbody></table></section>`
     : "<div></div>";
@@ -353,9 +357,10 @@ async function main() {
   const ms = Math.round(performance.now() - t0);
   barTitle.textContent = "Документ готов";
   // Колонтитул с номерами страниц рисует сама страница (Chrome, Edge, Яндекс); Firefox его не поддерживает
+  // Принтер «Microsoft Print to PDF» печатает на книжный лист и поворачивает альбомную страницу — нужен встроенный PDF браузера
   const tip = /Firefox\//.test(navigator.userAgent)
-    ? "В окне печати выберите «Сохранить в PDF»; номера страниц включаются в «Колонтитулах» Firefox."
-    : "В окне печати выберите «Сохранить как PDF» и снимите галочку «Колонтитулы» — номера страниц уже есть внизу листа.";
+    ? "В окне печати назначение — «Сохранить в PDF» (не «Microsoft Print to PDF»: он поворачивает лист); номера страниц включаются в «Колонтитулах» Firefox."
+    : "В окне печати назначение — «Сохранить как PDF» (не «Microsoft Print to PDF»: он поворачивает лист); галочку «Колонтитулы» снимите — номера страниц уже есть внизу листа.";
   barHint.textContent = `Строк: ${p.meta.rows.toLocaleString("ru-RU")}. ${tip}`;
   barHint.title = `Подготовка документа заняла ${ms} мс`;
   printBtn.disabled = false;
