@@ -104,22 +104,96 @@ function autoAlign(c) {
   return c.k === "n" || c.k === "p" ? "r" : c.k === "d" || c.k === "b" ? "c" : "l";
 }
 
-/** Доли ширины: заданные в визуале или по длине содержимого (выборка до 400 строк). */
-export function columnWeights(cols, texts) {
-  return cols.map((c, j) => {
-    if (c.w > 0) return c.w;
-    const sample = texts[j].slice(0, 400);
-    let sum = 0;
-    let word = 0;    // самое длинное слово: его нельзя перенести, столбец должен его вмещать
-    for (const s of sample) {
-      sum += Math.min(s.length, 70);
-      if (c.wr) { for (const w of s.split(/\s+/)) if (w.length > word) word = w.length; }
-      else if (s.length > word) word = s.length;
+const FONT_FAMILY = 'Arial, "Liberation Sans", "Helvetica Neue", Helvetica, sans-serif';
+const MM = 96 / 25.4;                       // CSS-пикселей в миллиметре
+const CELL_PAD = 1.8 * MM + 2;              // поля ячейки 2 × 0,8 мм, рамка и запас на округление
+let measureCtx = null;
+
+/** Измеритель ширины строки тем шрифтом, которым она будет напечатана (с кешем). */
+function measurer(font) {
+  if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
+  const cache = new Map();
+  return (text) => {
+    let w = cache.get(text);
+    if (w === undefined) {
+      measureCtx.font = font;
+      w = measureCtx.measureText(text).width;
+      cache.set(text, w);
     }
-    const avg = sample.length ? sum / sample.length : 4;
-    const headWord = Math.max(...c.h.split(/\s+/).map((w) => w.length), 3);
-    return Math.min(Math.max(avg * 1.05, Math.min(word, 24) * 0.95, headWord * 0.9, 3.5), 34);
+    return w;
+  };
+}
+
+const sum = (a) => a.reduce((x, y) => x + y, 0);
+
+/**
+ * Ширины столбцов в процентах ширины таблицы.
+ * Минимум столбца — самое длинное неразрывное значение (без переноса — вся строка, с переносом —
+ * самое длинное слово) и самое длинное слово заголовка. Желаемая ширина — 90-й процентиль строк
+ * (с переносом) или самая длинная строка (без переноса). Остаток ширины получают столбцы,
+ * где текст ещё переносится, затем — текстовые столбцы с переносом. Заданная в визуале
+ * ширина (c.w, % ширины листа) соблюдается как есть.
+ */
+export function columnWidths(cols, texts, totalPx, fontPt) {
+  const plain = measurer(`${fontPt}pt ${FONT_FAMILY}`);
+  const bold = measurer(`bold ${fontPt}pt ${FONT_FAMILY}`);
+  const cap = totalPx * 0.4;
+  const min = [], pref = [], full = [], fixed = [];
+  cols.forEach((c, j) => {
+    const widths = [];
+    let token = 0;
+    let widest = 0;
+    for (const s of texts[j]) {
+      if (!s) continue;
+      const w = plain(s);
+      widths.push(w);
+      if (w > widest) widest = w;
+      if (c.wr) {
+        for (const t of s.split(/\s+/)) if (t) { const tw = plain(t); if (tw > token) token = tw; }
+      }
+    }
+    if (!c.wr) token = widest;
+    const head = Math.max(0, ...c.h.split(/\s+/).filter(Boolean).map(bold));
+    widths.sort((a, b) => a - b);
+    const p90 = widths.length ? widths[Math.min(widths.length - 1, Math.floor(widths.length * 0.9))] : 0;
+    min[j] = Math.min(Math.max(token, head) + CELL_PAD, cap);
+    pref[j] = Math.min(Math.max(min[j], (c.wr ? p90 : widest) + CELL_PAD), Math.max(cap, min[j]));
+    full[j] = Math.max(pref[j], Math.min(widest + CELL_PAD, cap));
+    fixed[j] = c.w > 0 ? totalPx * Math.min(c.w, 90) / 100 : 0;
   });
+
+  const width = cols.map((c, j) => fixed[j]);
+  const auto = cols.map((c, j) => j).filter((j) => !fixed[j]);
+  const rest = totalPx - sum(width);
+  const sumMin = sum(auto.map((j) => min[j]));
+  const sumPref = sum(auto.map((j) => pref[j]));
+
+  if (auto.length === 0) {
+    // все ширины заданы вручную — только нормируем
+  } else if (rest >= sumPref) {
+    auto.forEach((j) => { width[j] = pref[j]; });
+    let extra = rest - sumPref;
+    const needy = auto.filter((j) => full[j] > pref[j] + 0.5);           // текст там ещё переносится
+    const deficit = sum(needy.map((j) => full[j] - pref[j]));
+    if (deficit > 0) {
+      const give = Math.min(extra, deficit);
+      needy.forEach((j) => { width[j] += give * (full[j] - pref[j]) / deficit; });
+      extra -= give;
+    }
+    if (extra > 0.5) {
+      const wrapText = auto.filter((j) => cols[j].k === "t" && cols[j].wr);
+      const pool = wrapText.length ? wrapText : auto;
+      const base = sum(pool.map((j) => full[j])) || 1;
+      pool.forEach((j) => { width[j] += extra * full[j] / base; });
+    }
+  } else if (rest >= sumMin) {
+    const span = sumPref - sumMin;
+    auto.forEach((j) => { width[j] = min[j] + (span > 0 ? (rest - sumMin) * (pref[j] - min[j]) / span : 0); });
+  } else {
+    auto.forEach((j) => { width[j] = min[j]; });                          // не помещается: сжимаем всё пропорционально
+  }
+  const total = sum(width) || 1;
+  return width.map((w) => w / total * 100);
 }
 
 function stripStatusPrefix(s) {
@@ -141,9 +215,11 @@ function renderHead(meta, now) {
 
 function renderSummary(meta, hdr) {
   if (!meta.showSummary || !hdr) return "";
+  // Показатели: подпись и значение — одна запись, между записями линия
   const kpi = hdr.k.length
-    ? `<section class="card"><h2>${esc(meta.sumTitle || "Показатели")}</h2><dl class="kv">${
-        hdr.k.map(([l, v]) => `<dt>${esc(l)}</dt><dd>${esc(v)}</dd>`).join("")}</dl></section>`
+    ? `<section class="card"><h2>${esc(meta.sumTitle || "Показатели")}</h2><table class="kt"><tbody>${
+        hdr.k.map(([l, v]) => `<tr><td><span class="kt__label">${esc(l)}</span><span class="kt__value">${esc(v)}</span></td></tr>`).join("")
+      }</tbody></table></section>`
     : "<div></div>";
 
   let st = "<div></div>";
@@ -161,9 +237,11 @@ function renderSummary(meta, hdr) {
     st = `<section class="card"><h2>Статусы по периодам КП</h2><table class="st"><thead>${head1}${head2}</thead><tbody>${body}</tbody></table></section>`;
   }
 
+  // Виды работ: название и значение — одна строка, между строками линия
   const vr = hdr.w.length
-    ? `<section class="card"><h2>Виды работ</h2><dl class="kv kv--list">${
-        hdr.w.map(([l, v]) => `<dt>${esc(l)}</dt><dd>${esc(v)}</dd>`).join("")}</dl></section>`
+    ? `<section class="card"><h2>Виды работ</h2><table class="kt kt--list"><tbody>${
+        hdr.w.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="kt__num">${esc(v)}</td></tr>`).join("")
+      }</tbody></table></section>`
     : "<div></div>";
 
   return `<div class="summary">${kpi}${st}${vr}</div>`;
@@ -182,9 +260,10 @@ function renderTable(p) {
   const n = p.meta.rows;
   const texts = cols.map((c, j) => data[j].map((v) => formatCell(v, c)));
 
-  const weights = columnWeights(cols, texts);
-  const total = weights.reduce((a, b) => a + b, 0) || 1;
-  const colgroup = weights.map((w) => `<col style="width:${(w / total * 100).toFixed(2)}%">`).join("");
+  const paper = PAPER[p.meta.paper] || PAPER.A4L;
+  const tablePx = (parseFloat(paper.width) - 1.2) * MM;                 // ширина области печати минус поля .doc
+  const shares = columnWidths(cols, texts, tablePx, p.meta.font || 7);
+  const colgroup = shares.map((w) => `<col style="width:${w.toFixed(3)}%">`).join("");
   const thead = cols.map((c) => `<th>${esc(c.h)}</th>`).join("");
   const aligns = cols.map(autoAlign);
 

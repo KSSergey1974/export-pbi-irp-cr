@@ -103,6 +103,7 @@ body {
 .summary {
   display: grid;
   grid-template-columns: 1fr 2.3fr 1fr;
+  align-items: start;       /* высота каждой таблички — по её содержимому */
   gap: 3mm;
   margin: 3mm 0 0;
   break-inside: avoid;
@@ -122,18 +123,42 @@ body {
   font-weight: 700;
 }
 
-.kv {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  margin: 0;
-  padding: 1.5mm 2mm;
+/* таблички сводки: запись = строка, между строками — линия */
+.kt {
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.kv dt { color: var(--muted); font-size: 7pt; }
-.kv dd { margin: 0 0 1.2mm; font-weight: 700; font-size: 9pt; }
-.kv--list { grid-template-columns: minmax(0, 1fr) auto; gap: 0.6mm 3mm; }
-.kv--list dt { color: var(--ink); font-size: 8pt; }
-.kv--list dd { margin: 0; font-size: 8pt; text-align: right; }
+.kt td {
+  padding: 1mm 2mm;
+  vertical-align: top;
+}
+
+.kt tr + tr td { border-top: 0.2mm solid var(--rule); }
+
+.kt__label {
+  display: block;
+  color: var(--muted);
+  font-size: 7pt;
+}
+
+.kt__value {
+  display: block;
+  margin-top: 0.3mm;
+  font-size: 9pt;
+  font-weight: 700;
+}
+
+.kt--list td {
+  padding: 0.6mm 2mm;
+  font-size: 8pt;
+}
+
+.kt--list td.kt__num {
+  text-align: right;
+  font-weight: 700;
+  white-space: nowrap;
+}
 
 .st {
   width: 100%;
@@ -149,7 +174,7 @@ body {
   white-space: nowrap;
 }
 
-.st th { background: var(--head); font-weight: 700; text-align: center; }
+.st th { background: #ffffff; font-weight: 700; text-align: center; }
 .st td.st__label { text-align: left; }
 .st tr.st__total td { background: var(--head); font-weight: 700; }
 .st td.st__all { font-weight: 700; }
