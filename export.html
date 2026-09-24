@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>Выгрузка в PDF</title>
+  <link rel="stylesheet" href="export.css">
+  <style id="page-rules"></style>
+</head>
+<body>
+  <div class="bar no-print" id="bar">
+    <div class="bar__text">
+      <p class="bar__title" id="bar-title">Готовлю документ…</p>
+      <p class="bar__hint" id="bar-hint">Распаковка данных из адреса страницы.</p>
+    </div>
+    <button class="bar__btn" id="print" type="button" disabled>Сохранить в PDF</button>
+  </div>
+  <main class="doc" id="doc"></main>
+  <script type="module" src="export.js"></script>
+</body>
+</html>
