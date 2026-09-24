@@ -15,7 +15,10 @@
       <p class="bar__title" id="bar-title">Готовлю документ…</p>
       <p class="bar__hint" id="bar-hint">Распаковка данных из адреса страницы.</p>
     </div>
-    <button class="bar__btn" id="print" type="button" disabled>Сохранить в PDF</button>
+    <div class="bar__actions">
+      <button class="bar__btn" id="print" type="button" disabled>Сохранить PDF</button>
+      <button class="bar__btn" id="xlsx" type="button" disabled>Скачать XLSX</button>
+    </div>
   </div>
   <main class="doc" id="doc"></main>
   <script type="module" src="export.js"></script>

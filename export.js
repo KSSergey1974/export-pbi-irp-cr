@@ -12,6 +12,8 @@ const bar = document.getElementById("bar");
 const barTitle = document.getElementById("bar-title");
 const barHint = document.getElementById("bar-hint");
 const printBtn = document.getElementById("print");
+const xlsxBtn = document.getElementById("xlsx");
+let current = null;     // подготовленная выгрузка: общая для PDF (печать) и XLSX
 const doc = document.getElementById("doc");
 
 // ---------------------------------------------------------------- разбор пакета
@@ -321,19 +323,22 @@ function renderFilters(meta, hdr) {
   return `<section class="filters"><h2>Отбор</h2><p>${items}</p></section>`;
 }
 
-function renderTable(p) {
+/** Значения, тексты и цвета строк — один раз для документа и для XLSX. */
+function prepareTable(p) {
   const cols = p.cols;
   const data = p.data.map(decodeColumn);
   const colors = p.rc ? decodeColumn(p.rc) : [];
-  const n = p.meta.rows;
   const texts = cols.map((c, j) => data[j].map((v) => formatCell(v, c)));
+  return { cols, data, colors, texts, aligns: cols.map(autoAlign), n: p.meta.rows };
+}
 
+function renderTable(p, t) {
+  const { cols, data, colors, texts, aligns, n } = t;
   const paper = PAPER[p.meta.paper] || PAPER.A4L;
   const tablePx = (parseFloat(paper.width) - 1.2) * MM;                 // ширина области печати минус поля .doc
   const shares = columnWidths(cols, texts, tablePx, p.meta.font || 7);
   const colgroup = shares.map((w) => `<col style="width:${w.toFixed(3)}%">`).join("");
   const thead = cols.map((c) => `<th>${esc(c.h)}</th>`).join("");
-  const aligns = cols.map(autoAlign);
 
   const out = [];
   for (let i = 0; i < n; i++) {
@@ -381,14 +386,59 @@ function nowText() {
 
 export function renderDocument(p) {
   const now = nowText();
+  const table = prepareTable(p);
   applyPageRules(p.meta);
   doc.dataset.paper = PAPER[p.meta.paper] ? p.meta.paper : "A4L";   // раскладка сводки зависит от формата листа
   doc.innerHTML =
     renderHead(p.meta, now) +
     renderSummary(p.meta, p.hdr) +
     renderFilters(p.meta, p.hdr) +
-    renderTable(p);
+    renderTable(p, table);
   document.title = `${p.meta.title || "Выгрузка"} — ${now.slice(0, 10)}`;
+  current = { p, table, now };
+}
+
+// ---------------------------------------------------------------- XLSX
+
+/** Имя файла: заголовок и дата, без символов, запрещённых в Windows. */
+function fileName(title, now) {
+  const base = `${title || "Выгрузка"} — ${now.slice(0, 10)}`.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_").trim();
+  return (base || "Выгрузка") + ".xlsx";
+}
+
+function saveBlob(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+async function downloadXlsx() {
+  if (!current) return;
+  const label = xlsxBtn.textContent;
+  xlsxBtn.disabled = true;
+  xlsxBtn.textContent = "Готовлю XLSX…";
+  try {
+    const { buildXlsx } = await import("./xlsx.js");    // модуль грузится только при выборе XLSX
+    const { p, table, now } = current;
+    const blob = await buildXlsx({
+      title: p.meta.title, subtitle: p.meta.subtitle, created: now, rows: table.n,
+      cols: table.cols, values: table.data, texts: table.texts, rowColors: table.colors, aligns: table.aligns,
+      hdr: p.hdr, sumTitle: p.meta.sumTitle, showSummary: p.meta.showSummary, showFilters: p.meta.showFilters
+    });
+    const name = fileName(p.meta.title, now);
+    saveBlob(blob, name);
+    barHint.textContent = `Файл «${name}» (${Math.max(1, Math.round(blob.size / 1024)).toLocaleString("ru-RU")} КБ) сохранён в папку загрузок.`;
+    document.body.dataset.xlsx = "1";
+  } catch (e) {
+    barHint.textContent = `Не удалось собрать XLSX: ${e.message}`;
+  } finally {
+    xlsxBtn.disabled = false;
+    xlsxBtn.textContent = label;
+  }
 }
 
 // ---------------------------------------------------------------- запуск
@@ -398,6 +448,8 @@ function showError(title, hint) {
   barTitle.textContent = title;
   barHint.textContent = hint;
   printBtn.disabled = true;
+  xlsxBtn.disabled = true;
+  current = null;
 }
 
 async function main() {
@@ -412,7 +464,7 @@ async function main() {
     return;
   }
   if (decoded.none) {
-    showError("Страница открыта без данных", "Откройте её кнопкой «Выгрузить в PDF» в отчёте Power BI.");
+    showError("Страница открыта без данных", "Откройте её кнопкой выгрузки в отчёте Power BI.");
     doc.innerHTML = "";
     return;
   }
@@ -420,25 +472,21 @@ async function main() {
   const t0 = performance.now();
   renderDocument(p);
   const ms = Math.round(performance.now() - t0);
-  barTitle.textContent = "Документ готов";
-  // Колонтитул с номерами страниц рисует сама страница (Chrome, Edge, Яндекс); Firefox его не поддерживает
-  // Принтер «Microsoft Print to PDF» печатает на книжный лист и поворачивает альбомную страницу — нужен встроенный PDF браузера
-  const tip = /Firefox\//.test(navigator.userAgent)
-    ? "В окне печати назначение — «Сохранить в PDF» (не «Microsoft Print to PDF»: он поворачивает лист); номера страниц включаются в «Колонтитулах» Firefox."
-    : "В окне печати назначение — «Сохранить как PDF» (не «Microsoft Print to PDF»: он поворачивает лист); галочку «Колонтитулы» снимите — номера страниц уже есть внизу листа.";
-  barHint.textContent = `Строк: ${p.meta.rows.toLocaleString("ru-RU")}. ${tip}`;
+  barTitle.textContent = "Документ готов — выберите формат";
+  // Колонтитул с номерами страниц рисует сама страница (Chrome, Edge, Яндекс); Firefox его не поддерживает.
+  // Принтер «Microsoft Print to PDF» печатает на книжный лист и поворачивает альбомную страницу — нужен встроенный PDF браузера.
+  const pdfTip = /Firefox\//.test(navigator.userAgent)
+    ? "PDF: в окне печати назначение «Сохранить в PDF» (не «Microsoft Print to PDF» — он поворачивает лист); номера страниц — в «Колонтитулах» Firefox."
+    : "PDF: в окне печати назначение «Сохранить как PDF» (не «Microsoft Print to PDF» — он поворачивает лист), галочку «Колонтитулы» снимите.";
+  barHint.textContent = `Строк: ${p.meta.rows.toLocaleString("ru-RU")}. ${pdfTip} XLSX: файл сохранится в папку загрузок.`;
   barHint.title = `Подготовка документа заняла ${ms} мс`;
   printBtn.disabled = false;
+  xlsxBtn.disabled = false;
   document.body.dataset.ready = "1";
-
-  const noPrint = new URLSearchParams(location.search).has("noprint");
-  if (p.meta.autoPrint && !noPrint) {
-    const fontsReady = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
-    fontsReady.then(() => setTimeout(() => window.print(), 350));
-  }
 }
 
 printBtn.addEventListener("click", () => window.print());
+xlsxBtn.addEventListener("click", () => { void downloadXlsx(); });
 // Новая ссылка, вставленная в уже открытую вкладку, меняет только фрагмент — перерисовываем
 window.addEventListener("hashchange", () => { if (location.hash) main(); });
 main();
