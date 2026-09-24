@@ -273,7 +273,12 @@ async function main() {
   renderDocument(p);
   const ms = Math.round(performance.now() - t0);
   barTitle.textContent = "Документ готов";
-  barHint.textContent = `Строк: ${p.meta.rows.toLocaleString("ru-RU")}. В окне печати выберите «Сохранить как PDF». Подготовка заняла ${ms} мс.`;
+  // Колонтитул с номерами страниц рисует сама страница (Chrome, Edge, Яндекс); Firefox его не поддерживает
+  const tip = /Firefox\//.test(navigator.userAgent)
+    ? "В окне печати выберите «Сохранить в PDF»; номера страниц включаются в «Колонтитулах» Firefox."
+    : "В окне печати выберите «Сохранить как PDF» и снимите галочку «Колонтитулы» — номера страниц уже есть внизу листа.";
+  barHint.textContent = `Строк: ${p.meta.rows.toLocaleString("ru-RU")}. ${tip}`;
+  barHint.title = `Подготовка документа заняла ${ms} мс`;
   printBtn.disabled = false;
   document.body.dataset.ready = "1";
 
