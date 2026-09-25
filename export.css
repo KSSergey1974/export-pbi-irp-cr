@@ -107,16 +107,29 @@ body {
 .head__meta dt { color: #d0d0d0; }
 .head__meta dd { margin: 0; font-weight: 700; text-align: right; }
 
-/* Сводка как на дашборде: показатели | матрица статусов | диаграмма | виды работ.
-   Матрица и диаграмма — по своему содержимому, боковые таблички делят остаток */
+/* Сводка как на дашборде: [показатели + диаграмма] | матрица статусов | виды работ.
+   Показатели и виды работ — по содержимому, матрица забирает остаток ширины */
 .summary {
   display: grid;
-  grid-template-columns: minmax(40mm, 1fr) max-content max-content minmax(40mm, 1fr);
+  grid-template-columns: max-content minmax(min-content, 1fr) max-content;
+  grid-template-areas: "pair st vr";
   align-items: start;       /* высота каждой таблички — по её содержимому */
   gap: 3mm;
   margin: 3mm 0 0;
   break-inside: avoid;
 }
+
+/* Показатели и диаграмма — пара одной высоты: рамка диаграммы тянется до высоты показателей */
+.summary__pair {
+  grid-area: pair;
+  display: grid;
+  grid-template-columns: max-content max-content;
+  align-items: stretch;
+  gap: 3mm;
+}
+
+.card--st { grid-area: st; }
+.card--vr { grid-area: vr; }
 
 .card {
   border: 0.3mm solid var(--rule);
@@ -144,15 +157,26 @@ body {
   white-space: nowrap;      /* шрифт и начертание — как у заголовка таблички */
 }
 
-/* A4 книжная: в ряд не помещается — два столбца, диаграмма и виды работ во втором ряду */
+/* A4 книжная: в ряд не помещается — матрица статусов уходит во второй ряд на всю ширину */
 .doc[data-paper="A4P"] .summary {
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-areas: "pair vr" "st st";
 }
 
-.card--pie .pie {
-  display: block;
-  margin: 1mm auto;
+.card--pie {
+  display: flex;
+  flex-direction: column;
 }
+
+.card--pie .pie-box {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1mm 2mm;
+}
+
+.card--pie .pie { display: block; }
 
 /* таблички сводки: запись = строка, между строками — линия */
 .kt {
@@ -191,11 +215,13 @@ body {
   white-space: nowrap;
 }
 
-/* Внешнюю рамку матрицы даёт карточка, как у боковых табличек: крайние линии ячеек скрыты */
+/* Внешнюю рамку матрицы даёт карточка, как у боковых табличек: крайние линии ячеек скрыты.
+   Ширины: столбец статусов задан, остальные делят ширину поровну */
 .st {
   width: 100%;
   border-collapse: collapse;
   border-style: hidden;
+  table-layout: fixed;
   font-size: 7.5pt;
 }
 
@@ -288,5 +314,4 @@ body {
 
 @media (max-width: 700px) {
   .bar { flex-wrap: wrap; }
-  .summary { grid-template-columns: minmax(0, 1fr); }
 }

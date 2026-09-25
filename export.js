@@ -215,17 +215,31 @@ function renderHead(meta, now) {
   </header>`;
 }
 
-const PIE_W = 200;              // единиц viewBox по ширине
-const PIE_H = 150;
-const PIE_MM = 50;              // ширина диаграммы на листе, мм → 1 единица = 0,25 мм
-const PIE_FONT = 7 / 72 * 25.4 / (PIE_MM / PIE_W);   // 7 пт в единицах viewBox
+const PIE_W = 208;              // единиц viewBox; 1 единица = 0,25 мм → рисунок 52 × 38 мм
+const PIE_H = 152;
+const PIE_UNIT_MM = 0.25;
+const PIE_FONT = 7 / 72 * 25.4 / PIE_UNIT_MM;          // 7 пт в единицах viewBox
+const PX_TO_UNIT = 25.4 / 96 / PIE_UNIT_MM;             // CSS-пиксель → единица viewBox
 
 const f1 = (x) => x.toFixed(1);
 
+/** Помещается ли подпись (w × h) целиком внутри сектора [a0, a1] круга радиуса r с центром в (px, py). */
+function labelInsideWedge(cx, cy, r, a0, a1, px, py, w, h) {
+  const span = a1 - a0;
+  for (const [dx, dy] of [[-w / 2, -h / 2], [w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2]]) {
+    const x = px + dx - cx, y = py + dy - cy;
+    if (Math.hypot(x, y) > r - 2) return false;
+    let rel = Math.atan2(y, x) - a0;
+    rel = ((rel % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    if (rel < 0.03 || rel > span - 0.03) return false;
+  }
+  return true;
+}
+
 /**
- * Круговая диаграмма «МКД по статусам», как на странице отчёта: доля статуса = МКД в столбце «Всего»
- * матрицы статусов, цвета статусов, подписи-проценты снаружи с выносками. Порядок — как в матрице,
- * от 12 часов по часовой стрелке.
+ * Круговая диаграмма «МКД по статусам», как на дашборде: доля статуса = МКД в столбце «Всего»
+ * матрицы статусов, цвета статусов, от 12 часов по часовой стрелке. Подпись ставится внутрь доли,
+ * если целиком в ней помещается, иначе — рядом снаружи с короткой выноской.
  */
 export function renderPie(hdr) {
   const slices = hdr.s
@@ -235,9 +249,12 @@ export function renderPie(hdr) {
   const total = slices.reduce((a, x) => a + x.value, 0);
   if (!total) return "";
 
-  const cx = PIE_W / 2, cy = PIE_H / 2, r = 47, lr = r + 15;   // lr — радиус подписей; по краям остаётся запас
+  const measure = measurer(`7pt ${FONT_FAMILY}`);
+  const cx = PIE_W / 2, cy = PIE_H / 2, r = 62;
+  const th = PIE_FONT * 1.05;                                // высота строки подписи
   const shapes = [];
-  const labels = [];
+  const inside = [];
+  const outside = [];
   let a0 = -Math.PI / 2;
   for (const x of slices) {
     const share = x.value / total;
@@ -250,48 +267,74 @@ export function renderPie(hdr) {
       shapes.push(`<path d="M${cx} ${cy}L${f1(p0[0])} ${f1(p0[1])}A${r} ${r} 0 ${share > 0.5 ? 1 : 0} 1 ${f1(p1[0])} ${f1(p1[1])}Z" fill="${esc(x.color)}"/>`);
     }
     const mid = (a0 + a1) / 2;
-    labels.push({ mid, right: Math.cos(mid) >= 0, y: cy + lr * Math.sin(mid),
-      text: (share * 100).toLocaleString("ru-RU", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%" });
+    const text = (share * 100).toLocaleString("ru-RU", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+    const tw = measure(text) * PX_TO_UNIT;
+    let placed = false;
+    for (const k of [0.62, 0.52, 0.72]) {
+      const px = cx + k * r * Math.cos(mid), py = cy + k * r * Math.sin(mid);
+      if (share > 0.9999 || labelInsideWedge(cx, cy, r, a0, a1, px, py, tw + 2, th)) {
+        inside.push({ x: px, y: py, text });
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) outside.push({ mid, text, right: Math.cos(mid) >= 0, y: cy + (r + 9) * Math.sin(mid) });
     a0 = a1;
   }
 
-  // Подписи одной стороны раздвигаем по вертикали, чтобы мелкие доли не налезали друг на друга
-  const gap = PIE_FONT * 1.15, top = PIE_FONT * 0.7, bottom = PIE_H - PIE_FONT * 0.7;
+  // Наружные подписи одной стороны раздвигаем по вертикали, если сошлись
+  const gap = th * 1.1;
   for (const side of [true, false]) {
-    const ls = labels.filter((l) => l.right === side).sort((a, b) => a.y - b.y);
-    for (let i = 0; i < ls.length; i++) ls[i].y = Math.max(ls[i].y, i ? ls[i - 1].y + gap : top);
-    for (let i = ls.length - 1; i >= 0; i--) ls[i].y = Math.min(ls[i].y, i < ls.length - 1 ? ls[i + 1].y - gap : bottom);
+    const ls = outside.filter((l) => l.right === side).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < ls.length; i++) ls[i].y = Math.max(ls[i].y, ls[i - 1].y + gap);
+    for (let i = ls.length - 1; i >= 0; i--) {
+      ls[i].y = Math.min(ls[i].y, i < ls.length - 1 ? ls[i + 1].y - gap : PIE_H - th * 0.6);
+      ls[i].y = Math.max(ls[i].y, th * 0.6);
+    }
   }
 
-  const lines = labels.map((l) => {
-    const sx = cx + r * Math.cos(l.mid), sy = cy + r * Math.sin(l.mid);
-    const ex = cx + (r + 7) * Math.cos(l.mid), ey = cy + (r + 7) * Math.sin(l.mid);
-    const tx = cx + (l.right ? 1 : -1) * (lr + 4);
-    return `<polyline points="${f1(sx)},${f1(sy)} ${f1(ex)},${f1(ey)} ${f1(tx)},${f1(l.y)}" fill="none" stroke="#8c8c8c" stroke-width="0.6"/>` +
-      `<text x="${f1(tx + (l.right ? 2 : -2))}" y="${f1(l.y)}" text-anchor="${l.right ? "start" : "end"}" dominant-baseline="central">${esc(l.text)}</text>`;
-  }).join("");
+  const labels = inside.map((l) => `<text x="${f1(l.x)}" y="${f1(l.y)}" text-anchor="middle" dominant-baseline="central">${esc(l.text)}</text>`);
+  for (const l of outside) {
+    const c = Math.cos(l.mid), sn = Math.sin(l.mid);
+    const sx = cx + (r + 1) * c, sy = cy + (r + 1) * sn;               // от края доли
+    const ex = cx + (r + 6) * c, ey = cy + (r + 6) * sn;               // короткий отрезок по радиусу
+    const tx = ex + (l.right ? 3 : -3);                                  // и чуть в сторону
+    labels.push(`<polyline points="${f1(sx)},${f1(sy)} ${f1(ex)},${f1(ey)} ${f1(tx)},${f1(l.y)}" fill="none" stroke="#8c8c8c" stroke-width="0.6"/>` +
+      `<text x="${f1(tx + (l.right ? 1.5 : -1.5))}" y="${f1(l.y)}" text-anchor="${l.right ? "start" : "end"}" dominant-baseline="central">${esc(l.text)}</text>`);
+  }
 
-  return `<section class="card card--pie"><h2>МКД по статусам</h2>` +
-    `<svg class="pie" viewBox="0 0 ${PIE_W} ${PIE_H}" style="width:${PIE_MM}mm;height:${PIE_MM * PIE_H / PIE_W}mm" role="img" aria-label="Доли МКД по статусам">` +
+  return `<section class="card card--pie"><h2>МКД по статусам</h2><div class="pie-box">` +
+    `<svg class="pie" viewBox="0 0 ${PIE_W} ${PIE_H}" style="width:${PIE_W * PIE_UNIT_MM}mm;height:${PIE_H * PIE_UNIT_MM}mm" role="img" aria-label="Доли МКД по статусам">` +
     `<g stroke="#ffffff" stroke-width="0.8">${shapes.join("")}</g>` +
-    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#b3b3b3" stroke-width="0.6"/>` +   // светлые доли не сливаются с фоном
-    `<g font-family='Arial, "Liberation Sans", sans-serif' font-size="${f1(PIE_FONT)}" fill="#262626">${lines}</g></svg></section>`;
+    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#b3b3b3" stroke-width="0.6"/>` +     // светлые доли не сливаются с фоном
+    `<g font-family='Arial, "Liberation Sans", sans-serif' font-size="${f1(PIE_FONT)}" fill="#262626">${labels.join("")}</g></svg></div></section>`;
 }
 
 function renderSummary(meta, hdr) {
   if (!meta.showSummary || !hdr) return "";
   // Показатели: подпись и значение — одна запись, между записями линия
   const kpi = hdr.k.length
-    ? `<section class="card"><h2>${esc(meta.sumTitle || "Показатели")}</h2><table class="kt"><tbody>${
+    ? `<section class="card card--kpi"><h2>${esc(meta.sumTitle || "Показатели")}</h2><table class="kt"><tbody>${
         hdr.k.map(([l, v]) => `<tr><td><span class="kt__label">${esc(l)}</span><span class="kt__value">${esc(v)}</span></td></tr>`).join("")
       }</tbody></table></section>`
-    : "<div></div>";
+    : "";
 
-  let st = "<div></div>";
+  let st = "";
   if (hdr.s.length) {
     const periods = hdr.p;
+    const heads = periods.concat(["Всего"]);
+    // Столбец статусов — по самому длинному названию, остальные столбцы делят ширину поровну
+    const plain = measurer(`7.5pt ${FONT_FAMILY}`);
+    const bold = measurer(`bold 7.5pt ${FONT_FAMILY}`);
+    const pad = 2.4 * MM + 2;                                   // поля 2 × 1,2 мм, рамка, запас
+    const labelPx = Math.ceil(Math.max(bold("Статус"), ...hdr.s.map((r) => (r[0] ? plain : bold)(stripStatusPrefix(r[1])))) + pad);
+    const valuePx = Math.max(bold("МКД"), bold("ВР"), ...hdr.s.flatMap((r) => r.slice(2).map((v) => bold(String(v))))) + pad;
+    const pairPx = Math.max(...heads.map((p) => bold(p) + pad));
+    const colMin = Math.max(valuePx, pairPx / 2);
+    const minPx = Math.ceil(labelPx + colMin * 2 * heads.length + 3);
+
     const head1 = `<tr><th rowspan="2">Статус</th>${periods.map((p) => `<th colspan="2">${esc(p)}</th>`).join("")}<th colspan="2">Всего</th></tr>`;
-    const head2 = `<tr>${periods.concat(["Всего"]).map(() => "<th>МКД</th><th>ВР</th>").join("")}</tr>`;
+    const head2 = `<tr>${heads.map(() => "<th>МКД</th><th>ВР</th>").join("")}</tr>`;
     const body = hdr.s.map((row) => {
       const [color, label, ...vals] = row;
       const total = !color && label === "Всего";
@@ -303,18 +346,21 @@ function renderSummary(meta, hdr) {
       }).join("");
       return `<tr class="${total ? "st__total" : ""}"><td class="st__label"${bg}>${esc(stripStatusPrefix(label))}</td>${cells}</tr>`;
     }).join("");
-    st = `<section class="card"><h2>Статусы по периодам КП</h2><table class="st"><thead>${head1}${head2}</thead><tbody>${body}</tbody></table></section>`;
+    st = `<section class="card card--st" style="min-width:${minPx}px"><h2>Статусы по периодам КП</h2>` +
+      `<table class="st"><colgroup><col style="width:${labelPx}px"><col span="${2 * heads.length}"></colgroup>` +
+      `<thead>${head1}${head2}</thead><tbody>${body}</tbody></table></section>`;
   }
 
   // Виды работ: название и значение — одна строка, между строками линия
   const vr = hdr.w.length
-    ? `<section class="card"><h2 class="split"><span>Виды работ</span><span class="note">МКД (ВР/лифтов)</span></h2><table class="kt kt--list"><tbody>${
+    ? `<section class="card card--vr"><h2 class="split"><span>Виды работ</span><span class="note">МКД (ВР/лифт.)</span></h2><table class="kt kt--list"><tbody>${
         hdr.w.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="kt__num">${esc(v)}</td></tr>`).join("")
       }</tbody></table></section>`
-    : "<div></div>";
+    : "";
 
-  const pie = hdr.s.length ? renderPie(hdr) || "<div></div>" : "<div></div>";
-  return `<div class="summary">${kpi}${st}${pie}${vr}</div>`;
+  const pie = hdr.s.length ? renderPie(hdr) : "";
+  const pair = kpi || pie ? `<div class="summary__pair">${kpi}${pie}</div>` : "";
+  return `<div class="summary">${pair}${st}${vr}</div>`;
 }
 
 function renderFilters(meta, hdr) {
