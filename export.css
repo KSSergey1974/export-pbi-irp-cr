@@ -172,8 +172,7 @@ body {
   flex: 1 1 auto;
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 1mm 2mm;
+  justify-content: center;   /* зазор до рамки заложен в сам рисунок (1,2 мм) */
 }
 
 .card--pie .pie { display: block; }

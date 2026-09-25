@@ -215,19 +215,19 @@ function renderHead(meta, now) {
   </header>`;
 }
 
-const PIE_W = 208;              // единиц viewBox; 1 единица = 0,25 мм → рисунок 52 × 38 мм
-const PIE_H = 152;
-const PIE_UNIT_MM = 0.25;
-const PIE_FONT = 7 / 72 * 25.4 / PIE_UNIT_MM;          // 7 пт в единицах viewBox
-const PX_TO_UNIT = 25.4 / 96 / PIE_UNIT_MM;             // CSS-пиксель → единица viewBox
+const PIE_UNIT_MM = 0.25;                               // 1 единица рисунка = 0,25 мм
+const PIE_FONT = 7 / 72 * 25.4 / PIE_UNIT_MM;          // подписи 7 пт в единицах рисунка
+const PIE_GAP = 1.2 / PIE_UNIT_MM;                      // зазор от рисунка до рамки, 1,2 мм
+const PIE_MAX_W = 80 / PIE_UNIT_MM;                     // рисунок не шире 80 мм
+const PX_TO_UNIT = 25.4 / 96 / PIE_UNIT_MM;             // CSS-пиксель → единица рисунка
 
 const f1 = (x) => x.toFixed(1);
 
-/** Помещается ли подпись (w × h) целиком внутри сектора [a0, a1] круга радиуса r с центром в (px, py). */
-function labelInsideWedge(cx, cy, r, a0, a1, px, py, w, h) {
+/** Помещается ли подпись (w × h) с центром (px, py) целиком в сектор [a0, a1] круга радиуса r (центр в 0,0). */
+function labelInsideWedge(r, a0, a1, px, py, w, h) {
   const span = a1 - a0;
   for (const [dx, dy] of [[-w / 2, -h / 2], [w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2]]) {
-    const x = px + dx - cx, y = py + dy - cy;
+    const x = px + dx, y = py + dy;
     if (Math.hypot(x, y) > r - 2) return false;
     let rel = Math.atan2(y, x) - a0;
     rel = ((rel % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
@@ -236,78 +236,114 @@ function labelInsideWedge(cx, cy, r, a0, a1, px, py, w, h) {
   return true;
 }
 
-/**
- * Круговая диаграмма «МКД по статусам», как на дашборде: доля статуса = МКД в столбце «Всего»
- * матрицы статусов, цвета статусов, от 12 часов по часовой стрелке. Подпись ставится внутрь доли,
- * если целиком в ней помещается, иначе — рядом снаружи с короткой выноской.
- */
-export function renderPie(hdr) {
-  const slices = hdr.s
+/** Доли диаграммы: МКД в столбце «Всего» матрицы статусов, от 12 часов по часовой стрелке. */
+function pieSlices(hdr) {
+  const raw = hdr.s
     .filter((r) => r[0] && r[1] !== "Всего")
     .map((r) => ({ color: r[0], value: Number(String(r[r.length - 2]).replace(/\s/g, "")) || 0 }))
     .filter((x) => x.value > 0);
-  const total = slices.reduce((a, x) => a + x.value, 0);
-  if (!total) return "";
-
+  const total = raw.reduce((a, x) => a + x.value, 0);
+  if (!total) return null;
   const measure = measurer(`7pt ${FONT_FAMILY}`);
-  const cx = PIE_W / 2, cy = PIE_H / 2, r = 62;
-  const th = PIE_FONT * 1.05;                                // высота строки подписи
-  const shapes = [];
-  const inside = [];
-  const outside = [];
   let a0 = -Math.PI / 2;
-  for (const x of slices) {
+  return raw.map((x) => {
     const share = x.value / total;
     const a1 = a0 + share * 2 * Math.PI;
-    if (share > 0.9999) {
-      shapes.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${esc(x.color)}"/>`);
-    } else {
-      const p0 = [cx + r * Math.cos(a0), cy + r * Math.sin(a0)];
-      const p1 = [cx + r * Math.cos(a1), cy + r * Math.sin(a1)];
-      shapes.push(`<path d="M${cx} ${cy}L${f1(p0[0])} ${f1(p0[1])}A${r} ${r} 0 ${share > 0.5 ? 1 : 0} 1 ${f1(p1[0])} ${f1(p1[1])}Z" fill="${esc(x.color)}"/>`);
-    }
-    const mid = (a0 + a1) / 2;
     const text = (share * 100).toLocaleString("ru-RU", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
-    const tw = measure(text) * PX_TO_UNIT;
+    const slice = { color: x.color, share, a0, a1, mid: (a0 + a1) / 2, text, tw: measure(text) * PX_TO_UNIT };
+    a0 = a1;
+    return slice;
+  });
+}
+
+/** Раскладка при радиусе r (центр в 0,0): подписи внутри долей, где помещаются, иначе снаружи; рамка всего рисунка. */
+function pieLayout(slices, r) {
+  const th = PIE_FONT * 1.05;
+  const inside = [];
+  const outside = [];
+  for (const x of slices) {
     let placed = false;
     for (const k of [0.62, 0.52, 0.72]) {
-      const px = cx + k * r * Math.cos(mid), py = cy + k * r * Math.sin(mid);
-      if (share > 0.9999 || labelInsideWedge(cx, cy, r, a0, a1, px, py, tw + 2, th)) {
-        inside.push({ x: px, y: py, text });
+      const px = k * r * Math.cos(x.mid), py = k * r * Math.sin(x.mid);
+      if (x.share > 0.9999 || labelInsideWedge(r, x.a0, x.a1, px, py, x.tw + 2, th)) {
+        inside.push({ x: px, y: py, text: x.text });
         placed = true;
         break;
       }
     }
-    if (!placed) outside.push({ mid, text, right: Math.cos(mid) >= 0, y: cy + (r + 9) * Math.sin(mid) });
-    a0 = a1;
+    if (!placed) outside.push({ mid: x.mid, text: x.text, tw: x.tw, right: Math.cos(x.mid) >= 0, y: (r + 9) * Math.sin(x.mid) });
   }
-
-  // Наружные подписи одной стороны раздвигаем по вертикали, если сошлись
+  // наружные подписи одной стороны раздвигаем по вертикали, если сошлись
   const gap = th * 1.1;
   for (const side of [true, false]) {
     const ls = outside.filter((l) => l.right === side).sort((a, b) => a.y - b.y);
     for (let i = 1; i < ls.length; i++) ls[i].y = Math.max(ls[i].y, ls[i - 1].y + gap);
-    for (let i = ls.length - 1; i >= 0; i--) {
-      ls[i].y = Math.min(ls[i].y, i < ls.length - 1 ? ls[i + 1].y - gap : PIE_H - th * 0.6);
-      ls[i].y = Math.max(ls[i].y, th * 0.6);
-    }
   }
-
-  const labels = inside.map((l) => `<text x="${f1(l.x)}" y="${f1(l.y)}" text-anchor="middle" dominant-baseline="central">${esc(l.text)}</text>`);
+  const box = { x0: -r, y0: -r, x1: r, y1: r };
+  const grow = (x, y) => { box.x0 = Math.min(box.x0, x); box.x1 = Math.max(box.x1, x); box.y0 = Math.min(box.y0, y); box.y1 = Math.max(box.y1, y); };
   for (const l of outside) {
     const c = Math.cos(l.mid), sn = Math.sin(l.mid);
-    const sx = cx + (r + 1) * c, sy = cy + (r + 1) * sn;               // от края доли
-    const ex = cx + (r + 6) * c, ey = cy + (r + 6) * sn;               // короткий отрезок по радиусу
-    const tx = ex + (l.right ? 3 : -3);                                  // и чуть в сторону
-    labels.push(`<polyline points="${f1(sx)},${f1(sy)} ${f1(ex)},${f1(ey)} ${f1(tx)},${f1(l.y)}" fill="none" stroke="#8c8c8c" stroke-width="0.6"/>` +
-      `<text x="${f1(tx + (l.right ? 1.5 : -1.5))}" y="${f1(l.y)}" text-anchor="${l.right ? "start" : "end"}" dominant-baseline="central">${esc(l.text)}</text>`);
+    l.sx = (r + 1) * c; l.sy = (r + 1) * sn;                            // от края доли
+    l.ex = (r + 6) * c; l.ey = (r + 6) * sn;                            // короткий отрезок по радиусу
+    l.tx = l.ex + (l.right ? 3 : -3);                                   // и чуть в сторону
+    const x0 = l.right ? l.tx + 1.5 : l.tx - 1.5 - l.tw;
+    grow(l.ex, l.ey); grow(x0, l.y - th / 2); grow(x0 + l.tw, l.y + th / 2);
   }
+  return { r, inside, outside, box };
+}
 
-  return `<section class="card card--pie"><h2>МКД по статусам</h2><div class="pie-box">` +
-    `<svg class="pie" viewBox="0 0 ${PIE_W} ${PIE_H}" style="width:${PIE_W * PIE_UNIT_MM}mm;height:${PIE_H * PIE_UNIT_MM}mm" role="img" aria-label="Доли МКД по статусам">` +
+/**
+ * SVG диаграммы наибольшего размера, который с подписями и зазором PIE_GAP помещается
+ * в высоту availMm (и не шире PIE_MAX_W). Подписи всегда 7 пт — растёт только круг.
+ */
+function pieSvg(hdr, availMm) {
+  const slices = pieSlices(hdr);
+  if (!slices) return "";
+  const hMax = availMm / PIE_UNIT_MM;
+  let L = null;
+  for (let r = Math.floor(hMax / 2); r >= 20; r -= 0.5) {
+    const t = pieLayout(slices, r);
+    if (t.box.y1 - t.box.y0 + 2 * PIE_GAP <= hMax && t.box.x1 - t.box.x0 + 2 * PIE_GAP <= PIE_MAX_W) { L = t; break; }
+  }
+  if (!L) L = pieLayout(slices, 20);
+  const { r, inside, outside, box } = L;
+  const vx = box.x0 - PIE_GAP, vy = box.y0 - PIE_GAP;
+  const vw = box.x1 - box.x0 + 2 * PIE_GAP, vh = box.y1 - box.y0 + 2 * PIE_GAP;
+
+  const shapes = slices.map((x) => {
+    if (x.share > 0.9999) return `<circle cx="0" cy="0" r="${f1(r)}" fill="${esc(x.color)}"/>`;
+    const p0 = [r * Math.cos(x.a0), r * Math.sin(x.a0)], p1 = [r * Math.cos(x.a1), r * Math.sin(x.a1)];
+    return `<path d="M0 0L${f1(p0[0])} ${f1(p0[1])}A${f1(r)} ${f1(r)} 0 ${x.share > 0.5 ? 1 : 0} 1 ${f1(p1[0])} ${f1(p1[1])}Z" fill="${esc(x.color)}"/>`;
+  });
+  const labels = inside.map((l) => `<text x="${f1(l.x)}" y="${f1(l.y)}" text-anchor="middle" dominant-baseline="central">${esc(l.text)}</text>`);
+  for (const l of outside) {
+    labels.push(`<polyline points="${f1(l.sx)},${f1(l.sy)} ${f1(l.ex)},${f1(l.ey)} ${f1(l.tx)},${f1(l.y)}" fill="none" stroke="#8c8c8c" stroke-width="0.6"/>` +
+      `<text x="${f1(l.tx + (l.right ? 1.5 : -1.5))}" y="${f1(l.y)}" text-anchor="${l.right ? "start" : "end"}" dominant-baseline="central">${esc(l.text)}</text>`);
+  }
+  return `<svg class="pie" viewBox="${f1(vx)} ${f1(vy)} ${f1(vw)} ${f1(vh)}" style="width:${(vw * PIE_UNIT_MM).toFixed(2)}mm;height:${(vh * PIE_UNIT_MM).toFixed(2)}mm" role="img" aria-label="Доли МКД по статусам">` +
     `<g stroke="#ffffff" stroke-width="0.8">${shapes.join("")}</g>` +
-    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#b3b3b3" stroke-width="0.6"/>` +     // светлые доли не сливаются с фоном
-    `<g font-family='Arial, "Liberation Sans", sans-serif' font-size="${f1(PIE_FONT)}" fill="#262626">${labels.join("")}</g></svg></div></section>`;
+    `<circle cx="0" cy="0" r="${f1(r)}" fill="none" stroke="#b3b3b3" stroke-width="0.6"/>` +     // светлые доли не сливаются с фоном
+    `<g font-family='Arial, "Liberation Sans", sans-serif' font-size="${f1(PIE_FONT)}" fill="#262626">${labels.join("")}</g></svg>`;
+}
+
+/**
+ * Карточка диаграммы «МКД по статусам». Сначала рисунок небольшой (не растягивает ряд);
+ * после вёрстки fitPie() подбирает его под высоту рамки, равную высоте показателей.
+ */
+export function renderPie(hdr) {
+  const svg = pieSvg(hdr, 24);
+  return svg ? `<section class="card card--pie"><h2>МКД по статусам</h2><div class="pie-box">${svg}</div></section>` : "";
+}
+
+/** Рисунок диаграммы под заданную высоту — тот же расчёт, что при вписывании в рамку (для проверок). */
+export const pieSvgFor = (hdr, availMm) => pieSvg(hdr, availMm);
+
+/** Вписывает диаграмму в рамку: высота рамки задана табличкой показателей (без неё — 38 мм). */
+function fitPie(hdr) {
+  const box = doc.querySelector(".card--pie .pie-box");
+  if (!box || !hdr) return;
+  const availMm = doc.querySelector(".card--kpi") ? box.getBoundingClientRect().height * 25.4 / 96 : 38;
+  box.innerHTML = pieSvg(hdr, Math.max(availMm, 20));
 }
 
 function renderSummary(meta, hdr) {
@@ -440,6 +476,7 @@ export function renderDocument(p) {
     renderSummary(p.meta, p.hdr) +
     renderFilters(p.meta, p.hdr) +
     renderTable(p, table);
+  fitPie(p.hdr);
   document.title = `${p.meta.title || "Выгрузка"} — ${now.slice(0, 10)}`;
   current = { p, table, now };
 }
