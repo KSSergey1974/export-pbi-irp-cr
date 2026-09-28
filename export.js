@@ -236,12 +236,22 @@ function labelInsideWedge(r, a0, a1, px, py, w, h) {
   return true;
 }
 
-/** Доли диаграммы: МКД в столбце «Всего» матрицы статусов, от 12 часов по часовой стрелке. */
-function pieSlices(hdr) {
-  const raw = hdr.s
+/** Доли диаграммы из матрицы статусов: МКД в столбце «Всего» (предпоследнее поле строки S). */
+function pieItemsFromStatus(sRows) {
+  return sRows
     .filter((r) => r[0] && r[1] !== "Всего")
-    .map((r) => ({ color: r[0], value: Number(String(r[r.length - 2]).replace(/\s/g, "")) || 0 }))
-    .filter((x) => x.value > 0);
+    .map((r) => ({ color: r[0], value: Number(String(r[r.length - 2]).replace(/\s/g, "")) || 0 }));
+}
+
+/** Нормализация входа диаграммы: { s: строки матрицы } (как раньше) или готовый список { color, value }. */
+function pieItems(src) {
+  if (Array.isArray(src)) return src;
+  return src && src.s ? pieItemsFromStatus(src.s) : [];
+}
+
+/** Доли диаграммы от 12 часов по часовой стрелке. */
+function pieSlices(src) {
+  const raw = pieItems(src).filter((x) => x.value > 0);
   const total = raw.reduce((a, x) => a + x.value, 0);
   if (!total) return null;
   const measure = measurer(`7pt ${FONT_FAMILY}`);
@@ -296,8 +306,8 @@ function pieLayout(slices, r) {
  * SVG диаграммы наибольшего размера, который с подписями и зазором PIE_GAP помещается
  * в высоту availMm (и не шире PIE_MAX_W). Подписи всегда 7 пт — растёт только круг.
  */
-function pieSvg(hdr, availMm) {
-  const slices = pieSlices(hdr);
+function pieSvg(src, availMm) {
+  const slices = pieSlices(src);
   if (!slices) return "";
   const hMax = availMm / PIE_UNIT_MM;
   let L = null;
@@ -326,82 +336,238 @@ function pieSvg(hdr, availMm) {
     `<g font-family='Arial, "Liberation Sans", sans-serif' font-size="${f1(PIE_FONT)}" fill="#262626">${labels.join("")}</g></svg>`;
 }
 
+const pendingPies = [];     // диаграммы, которые надо вписать в рамку после вёрстки
+
 /**
- * Карточка диаграммы «МКД по статусам». Сначала рисунок небольшой (не растягивает ряд);
- * после вёрстки fitPie() подбирает его под высоту рамки, равную высоте показателей.
+ * Карточка диаграммы. Сначала рисунок небольшой (не растягивает ряд);
+ * после вёрстки fitPies() подбирает его под высоту рамки, равную высоте соседнего блока.
  */
-export function renderPie(hdr) {
-  const svg = pieSvg(hdr, 24);
-  return svg ? `<section class="card card--pie"><h2>МКД по статусам</h2><div class="pie-box">${svg}</div></section>` : "";
+export function renderPie(src, title = "МКД по статусам") {
+  const svg = pieSvg(src, 24);
+  if (!svg) return "";
+  const id = `pie-${pendingPies.length}`;
+  pendingPies.push({ id, src });
+  return `<section class="card card--pie"><h2>${esc(title)}</h2><div class="pie-box" id="${id}">${svg}</div></section>`;
 }
 
 /** Рисунок диаграммы под заданную высоту — тот же расчёт, что при вписывании в рамку (для проверок). */
-export const pieSvgFor = (hdr, availMm) => pieSvg(hdr, availMm);
+export const pieSvgFor = (src, availMm) => pieSvg(src, availMm);
 
-/** Вписывает диаграмму в рамку: высота рамки задана табличкой показателей (без неё — 38 мм). */
-function fitPie(hdr) {
-  const box = doc.querySelector(".card--pie .pie-box");
-  if (!box || !hdr) return;
-  const availMm = doc.querySelector(".card--kpi") ? box.getBoundingClientRect().height * 25.4 / 96 : 38;
-  box.innerHTML = pieSvg(hdr, Math.max(availMm, 20));
-}
-
-function renderSummary(meta, hdr) {
-  if (!meta.showSummary || !hdr) return "";
-  // Показатели: подпись и значение — одна запись, между записями линия
-  const kpi = hdr.k.length
-    ? `<section class="card card--kpi"><h2>${esc(meta.sumTitle || "Показатели")}</h2><table class="kt"><tbody>${
-        hdr.k.map(([l, v]) => `<tr><td><span class="kt__label">${esc(l)}</span><span class="kt__value">${esc(v)}</span></td></tr>`).join("")
-      }</tbody></table></section>`
-    : "";
-
-  let st = "";
-  if (hdr.s.length) {
-    const periods = hdr.p;
-    const heads = periods.concat(["Всего"]);
-    // Столбец статусов — по самому длинному названию, остальные столбцы делят ширину поровну
-    const plain = measurer(`7.5pt ${FONT_FAMILY}`);
-    const bold = measurer(`bold 7.5pt ${FONT_FAMILY}`);
-    const pad = 2.4 * MM + 2;                                   // поля 2 × 1,2 мм, рамка, запас
-    const labelPx = Math.ceil(Math.max(bold("Статус"), ...hdr.s.map((r) => (r[0] ? plain : bold)(stripStatusPrefix(r[1])))) + pad);
-    const valuePx = Math.max(bold("МКД"), bold("ВР"), ...hdr.s.flatMap((r) => r.slice(2).map((v) => bold(String(v))))) + pad;
-    const pairPx = Math.max(...heads.map((p) => bold(p) + pad));
-    const colMin = Math.max(valuePx, pairPx / 2);
-    const minPx = Math.ceil(labelPx + colMin * 2 * heads.length + 3);
-
-    const head1 = `<tr><th rowspan="2">Статус</th>${periods.map((p) => `<th colspan="2">${esc(p)}</th>`).join("")}<th colspan="2">Всего</th></tr>`;
-    const head2 = `<tr>${heads.map(() => "<th>МКД</th><th>ВР</th>").join("")}</tr>`;
-    const body = hdr.s.map((row) => {
-      const [color, label, ...vals] = row;
-      const total = !color && label === "Всего";
-      const bg = color ? ` style="background:${esc(color)}"` : "";
-      // Цветом статуса — подпись строки и непустые ячейки МКД; ячейки ВР и пустые — белые (как в отчёте)
-      const cells = vals.map((v, i) => {
-        const fill = color && i % 2 === 0 && v !== "" ? bg : "";
-        return `<td class="${i >= vals.length - 2 ? "st__all" : ""}"${fill}>${esc(v)}</td>`;
-      }).join("");
-      return `<tr class="${total ? "st__total" : ""}"><td class="st__label"${bg}>${esc(stripStatusPrefix(label))}</td>${cells}</tr>`;
-    }).join("");
-    st = `<section class="card card--st" style="min-width:${minPx}px"><h2>Статусы по периодам КП</h2>` +
-      `<table class="st"><colgroup><col style="width:${labelPx}px"><col span="${2 * heads.length}"></colgroup>` +
-      `<thead>${head1}${head2}</thead><tbody>${body}</tbody></table></section>`;
+/** Вписывает диаграммы в рамки: в паре высоту задаёт соседний блок, отдельно стоящая — 38 мм. */
+function fitPies() {
+  for (const { id, src } of pendingPies.splice(0)) {
+    const box = document.getElementById(id);
+    if (!box) continue;
+    const paired = !!box.closest(".summary__pair");
+    const availMm = paired ? box.getBoundingClientRect().height * 25.4 / 96 : 38;
+    box.innerHTML = pieSvg(src, Math.max(availMm, 20));
   }
-
-  // Виды работ: название и значение — одна строка, между строками линия
-  const vr = hdr.w.length
-    ? `<section class="card card--vr"><h2 class="split"><span>Виды работ</span><span class="note">МКД (ВР/лифт.)</span></h2><table class="kt kt--list"><tbody>${
-        hdr.w.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="kt__num">${esc(v)}</td></tr>`).join("")
-      }</tbody></table></section>`
-    : "";
-
-  const pie = hdr.s.length ? renderPie(hdr) : "";
-  const pair = kpi || pie ? `<div class="summary__pair">${kpi}${pie}</div>` : "";
-  return `<div class="summary">${pair}${st}${vr}</div>`;
 }
 
-function renderFilters(meta, hdr) {
-  if (!meta.showFilters || !hdr || !hdr.f.length) return "";
-  const items = hdr.f.map(([l, v]) => `<b>${esc(l)}:</b> ${esc(v)}`).join(";&emsp;");
+// ---------------------------------------------------------------- шапка: блоки
+//
+// Формат PDF2: записи через ¶, поля через ¦. «B¦тип¦заголовок¦флаги» начинает блок, следующие
+// записи относятся к нему. Типы: kpi (K¦подпись¦значение), list (W¦название¦значение; «- » —
+// вложенный пункт), table (H — заголовки, X — стиль столбцов: «#цвет» заливка или «bar #цвет»
+// полоса по проценту в ячейке, R¦цвет¦ячейки…, T — строка итога), status (P, S — матрица
+// статусов), pie (V¦подпись¦значение¦цвет или доли из матрицы статусов), filters (F).
+// Флаги через «;»: below — блок под предыдущим; fill — рамка до нижнего края ряда (нижние границы
+// таких блоков на одном уровне, строки таблицы растягиваются); note=текст — подпись справа в заголовке.
+// Пустой заголовок — блок без полосы заголовка.
+// Старая шапка PDF1 («РРП_МО») переводится в те же блоки.
+
+function block(type, title, extra = {}) {
+  return Object.assign({ type, title, below: false, fill: false, note: "", k: [], p: [], s: [], w: [], f: [], h: [], x: [], rows: [], total: null, v: [] }, extra);
+}
+
+export function parseBlocks(raw) {
+  const recs = String(raw || "").split("\u00b6");
+  if (recs[0] !== "PDF2") return null;
+  const blocks = [];
+  let b = null;
+  for (let i = 1; i < recs.length; i++) {
+    if (!recs[i]) continue;
+    const f = recs[i].split("\u00a6");
+    const t = f.shift();
+    if (t === "B") {
+      const flags = f[2] || "";
+      b = block(f[0] || "", f[1] || "", {
+        below: /(^|;)\s*below\s*(;|$)/i.test(flags),
+        fill: /(^|;)\s*fill\s*(;|$)/i.test(flags),
+        note: (flags.match(/(?:^|;)\s*note=([^;]*)/i) || [])[1] || ""
+      });
+      blocks.push(b);
+      continue;
+    }
+    if (!b) continue;
+    if (t === "K") b.k.push(f);
+    else if (t === "P") b.p = f;
+    else if (t === "S") b.s.push(f);
+    else if (t === "W") b.w.push(f);
+    else if (t === "F") b.f.push(f);
+    else if (t === "H") b.h = f;
+    else if (t === "X") b.x = f;
+    else if (t === "R") b.rows.push({ color: f[0] || "", cells: f.slice(1) });
+    else if (t === "T") b.total = f;
+    else if (t === "V") b.v.push(f);
+  }
+  return blocks;
+}
+
+/** Старая шапка «РРП_МО» (PDF1): показатели, диаграмма, матрица статусов, виды работ, отбор. */
+export function legacyBlocks(meta, hdr) {
+  const out = [];
+  if (hdr.k.length) out.push(block("kpi", meta.sumTitle || "Показатели", { k: hdr.k }));
+  if (hdr.s.length) {
+    out.push(block("pie", "МКД по статусам"));
+    out.push(block("status", "Статусы по периодам КП", { p: hdr.p, s: hdr.s }));
+  }
+  if (hdr.w.length) out.push(block("list", "Виды работ", { note: "МКД (ВР/лифт.)", w: hdr.w }));
+  if (hdr.f.length) out.push(block("filters", "Отбор", { f: hdr.f }));
+  return out;
+}
+
+/** Блоки шапки из пакета: новая строка PDF2 (hraw) или старая разобранная шапка (hdr). */
+export function headerBlocks(p) {
+  if (p.hraw) return parseBlocks(p.hraw) || [];
+  return p.hdr ? legacyBlocks(p.meta, p.hdr) : [];
+}
+
+function kpiCard(b) {
+  if (!b.k.length) return "";
+  return `<section class="card card--kpi"><h2>${esc(b.title || "Показатели")}</h2><table class="kt"><tbody>${
+    b.k.map(([l, v]) => `<tr><td><span class="kt__label">${esc(l)}</span><span class="kt__value">${esc(v)}</span></td></tr>`).join("")
+  }</tbody></table></section>`;
+}
+
+function listCard(b) {
+  if (!b.w.length) return "";
+  const head = b.note
+    ? `<h2 class="split"><span>${esc(b.title)}</span><span class="note">${esc(b.note)}</span></h2>`
+    : `<h2>${esc(b.title)}</h2>`;
+  const rows = b.w.map(([l, v]) => {
+    const sub = /^\s*-\s+/.test(l || "");                           // «- » — вложенный пункт
+    return `<tr><td${sub ? ' class="kt__sub"' : ""}>${esc(sub ? l.replace(/^\s*-\s+/, "") : l)}</td><td class="kt__num">${esc(v === undefined ? "" : v)}</td></tr>`;
+  }).join("");
+  return `<section class="card card--list">${head}<table class="kt kt--list"><tbody>${rows}</tbody></table></section>`;
+}
+
+function statusCard(b) {
+  if (!b.s.length) return "";
+  const periods = b.p;
+  const heads = periods.concat(["Всего"]);
+  // Столбец статусов — по самому длинному названию, остальные столбцы делят ширину поровну
+  const plain = measurer(`7.5pt ${FONT_FAMILY}`);
+  const bold = measurer(`bold 7.5pt ${FONT_FAMILY}`);
+  const pad = 2.4 * MM + 2;                                   // поля 2 × 1,2 мм, рамка, запас
+  const labelPx = Math.ceil(Math.max(bold("Статус"), ...b.s.map((r) => (r[0] ? plain : bold)(stripStatusPrefix(r[1])))) + pad);
+  const valuePx = Math.max(bold("МКД"), bold("ВР"), ...b.s.flatMap((r) => r.slice(2).map((v) => bold(String(v))))) + pad;
+  const pairPx = Math.max(...heads.map((h) => bold(h) + pad));
+  const colMin = Math.max(valuePx, pairPx / 2);
+  const minPx = Math.ceil(labelPx + colMin * 2 * heads.length + 3);
+
+  const head1 = `<tr><th rowspan="2">Статус</th>${periods.map((h) => `<th colspan="2">${esc(h)}</th>`).join("")}<th colspan="2">Всего</th></tr>`;
+  const head2 = `<tr>${heads.map(() => "<th>МКД</th><th>ВР</th>").join("")}</tr>`;
+  const body = b.s.map((row) => {
+    const [color, label, ...vals] = row;
+    const total = !color && label === "Всего";
+    const bg = color ? ` style="background:${esc(color)}"` : "";
+    // Цветом статуса — подпись строки и непустые ячейки МКД; ячейки ВР и пустые — белые (как в отчёте)
+    const cells = vals.map((v, i) => {
+      const fill = color && i % 2 === 0 && v !== "" ? bg : "";
+      return `<td class="${i >= vals.length - 2 ? "st__all" : ""}"${fill}>${esc(v)}</td>`;
+    }).join("");
+    return `<tr class="${total ? "st__total" : ""}"><td class="st__label"${bg}>${esc(stripStatusPrefix(label))}</td>${cells}</tr>`;
+  }).join("");
+  return `<section class="card card--st" style="min-width:${minPx}px"><h2>${esc(b.title || "Статусы по периодам КП")}</h2>` +
+    `<table class="st"><colgroup><col style="width:${labelPx}px"><col span="${2 * heads.length}"></colgroup>` +
+    `<thead>${head1}${head2}</thead><tbody>${body}</tbody></table></section>`;
+}
+
+/** Стиль столбца таблицы из записи X: «#цвет» — заливка, «bar #цвет» — полоса по проценту из текста ячейки. */
+function colStyle(spec) {
+  const m = /^\s*(bar\s+)?(#[0-9a-f]{6})\s*$/i.exec(spec || "");
+  return m ? { bar: !!m[1], color: m[2] } : null;
+}
+
+function percentOf(text) {
+  const m = /(-?\d+(?:[.,]\d+)?)\s*%/.exec(String(text || "").replace(/\s/g, ""));
+  return m ? Math.min(Math.max(parseFloat(m[1].replace(",", ".")), 0), 100) : null;
+}
+
+function tableCard(b) {
+  if (!b.rows.length && !b.total) return "";
+  const n = Math.max(b.h.length, ...b.rows.map((r) => r.cells.length), b.total ? b.total.length : 0);
+  const styles = Array.from({ length: n }, (_, j) => colStyle(b.x[j]));
+  const cell = (v, j, rowColor) => {
+    const cs = styles[j];
+    let style = "";
+    if (j === 0 && rowColor) style = `background:${rowColor};`;
+    else if (cs && cs.bar) {
+      const pct = percentOf(v);
+      if (pct !== null) style = `background:linear-gradient(to right, ${cs.color} ${pct.toFixed(1)}%, transparent ${pct.toFixed(1)}%);`;
+    } else if (cs) style = `background:${cs.color};`;
+    return `<td class="${j === 0 ? "st__label" : ""}"${style ? ` style="${esc(style)}"` : ""}>${esc(v === undefined ? "" : v)}</td>`;
+  };
+  const head = b.h.length ? `<thead><tr>${Array.from({ length: n }, (_, j) => `<th>${esc(b.h[j] || "")}</th>`).join("")}</tr></thead>` : "";
+  const body = b.rows.map((r) => `<tr>${Array.from({ length: n }, (_, j) => cell(r.cells[j], j, r.color)).join("")}</tr>`).join("");
+  const total = b.total ? `<tr class="st__total">${Array.from({ length: n }, (_, j) => `<td class="${j === 0 ? "st__label" : ""}">${esc(b.total[j] || "")}</td>`).join("")}</tr>` : "";
+  const h2 = b.title ? `<h2>${esc(b.title)}</h2>` : "";
+  return `<section class="card card--tbl">${h2}<table class="st st--auto">${head}<tbody>${body}${total}</tbody></table></section>`;
+}
+
+function pieCard(b, blocks) {
+  const items = b.v.length
+    ? b.v.map((r) => ({ color: r[2] || "#cccccc", value: Number(String(r[1]).replace(/\s/g, "").replace(",", ".")) || 0 }))
+    : pieItemsFromStatus((blocks.find((x) => x.type === "status") || { s: [] }).s);
+  return renderPie(items, b.title || "МКД по статусам");
+}
+
+function blockCard(b, blocks) {
+  switch (b.type) {
+    case "kpi": return kpiCard(b);
+    case "list": return listCard(b);
+    case "status": return statusCard(b);
+    case "table": return tableCard(b);
+    case "pie": return pieCard(b, blocks);
+    default: return "";
+  }
+}
+
+/**
+ * Сводка на первом листе: блоки по порядку, слева направо, колонками. «below» ставит блок
+ * под предыдущим, диаграмма встаёт в пару с предыдущим блоком (та же высота рамки).
+ * Остаток ширины получает колонка с матрицей статусов или самой широкой таблицей; что не
+ * помещается в ряд, переносится на следующий.
+ */
+function renderSummary(meta, blocks) {
+  if (!meta.showSummary) return "";
+  const cols = [];
+  for (const b of blocks) {
+    if (b.type === "filters") continue;
+    let html = blockCard(b, blocks);
+    if (!html) continue;
+    if (b.fill) html = html.replace('<section class="card ', '<section class="card fill ');
+    const last = cols[cols.length - 1];
+    if (b.type === "pie" && last && last.cards.length === 1 && !last.pair) { last.pair = true; last.cards.push(html); last.blocks.push(b); continue; }
+    if (b.below && last) { last.cards.push(html); last.blocks.push(b); continue; }
+    cols.push({ cards: [html], blocks: [b], pair: false });
+  }
+  if (!cols.length) return "";
+  const weight = (c) => Math.max(...c.blocks.map((b) => (b.type === "status" ? 1000 : b.type === "table" ? Math.max(b.h.length, ...b.rows.map((r) => r.cells.length)) : 0)));
+  let grow = -1, best = 3;                                     // таблица из 4 и более столбцов или матрица
+  cols.forEach((c, i) => { const w = weight(c); if (w > best) { best = w; grow = i; } });
+  return `<div class="summary">${cols.map((c, i) => {
+    const inner = c.pair ? `<div class="summary__pair">${c.cards.join("")}</div>` : c.cards.join("");
+    const fill = c.blocks.some((b) => b.fill) ? " fill" : "";
+    return `<div class="summary__col${i === grow ? " grow" : ""}${fill}">${inner}</div>`;
+  }).join("")}</div>`;
+}
+
+function renderFilters(meta, blocks) {
+  const f = blocks.filter((b) => b.type === "filters").flatMap((b) => b.f);
+  if (!meta.showFilters || !f.length) return "";
+  const items = f.map(([l, v]) => `<b>${esc(l)}:</b> ${esc(v)}`).join(";&emsp;");
   return `<section class="filters"><h2>Отбор</h2><p>${items}</p></section>`;
 }
 
@@ -471,14 +637,15 @@ export function renderDocument(p) {
   const table = prepareTable(p);
   applyPageRules(p.meta);
   doc.dataset.paper = PAPER[p.meta.paper] ? p.meta.paper : "A4L";   // раскладка сводки зависит от формата листа
+  const blocks = headerBlocks(p);
   doc.innerHTML =
     renderHead(p.meta, now) +
-    renderSummary(p.meta, p.hdr) +
-    renderFilters(p.meta, p.hdr) +
+    renderSummary(p.meta, blocks) +
+    renderFilters(p.meta, blocks) +
     renderTable(p, table);
-  fitPie(p.hdr);
+  fitPies();
   document.title = `${p.meta.title || "Выгрузка"} — ${now.slice(0, 10)}`;
-  current = { p, table, now };
+  current = { p, table, now, blocks };
 }
 
 // ---------------------------------------------------------------- XLSX
@@ -506,11 +673,11 @@ async function downloadXlsx() {
   xlsxBtn.textContent = "Готовлю XLSX…";
   try {
     const { buildXlsx } = await import("./xlsx.js");    // модуль грузится только при выборе XLSX
-    const { p, table, now } = current;
+    const { p, table, now, blocks } = current;
     const blob = await buildXlsx({
       title: p.meta.title, subtitle: p.meta.subtitle, created: now, rows: table.n,
       cols: table.cols, values: table.data, texts: table.texts, rowColors: table.colors, aligns: table.aligns,
-      hdr: p.hdr, sumTitle: p.meta.sumTitle, showSummary: p.meta.showSummary, showFilters: p.meta.showFilters
+      blocks, showSummary: p.meta.showSummary, showFilters: p.meta.showFilters
     });
     const name = fileName(p.meta.title, now);
     saveBlob(blob, name);

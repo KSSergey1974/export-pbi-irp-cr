@@ -74,11 +74,12 @@ class Styles {
   }
 
   /** Индекс формата ячейки для сочетания числового формата, шрифта, заливки, рамки и выравнивания. */
-  xf({ fmt = "General", font = 0, fill = "", border = true, h = "", v = "center", wrap = false } = {}) {
-    const key = `${fmt}|${font}|${fill}|${border}|${h}|${v}|${wrap}`;
+  xf({ fmt = "General", font = 0, fill = "", border = true, h = "", v = "center", wrap = false, indent = 0 } = {}) {
+    const key = `${fmt}|${font}|${fill}|${border}|${h}|${v}|${wrap}|${indent}`;
     let id = this.xfIds.get(key);
     if (id === undefined) {
-      const al = `<alignment${h ? ` horizontal="${h}"` : ""}${v ? ` vertical="${v}"` : ""}${wrap ? ' wrapText="1"' : ""}/>`;
+      const hor = h || (indent ? "left" : "");
+      const al = `<alignment${hor ? ` horizontal="${hor}"` : ""}${v ? ` vertical="${v}"` : ""}${wrap ? ' wrapText="1"' : ""}${indent ? ` indent="${indent}"` : ""}/>`;
       id = this.xfs.length;
       this.xfs.push(`<xf numFmtId="${this.fmt(fmt)}" fontId="${font}" fillId="${this.fill(fill)}" borderId="${border ? 1 : 0}" xfId="0"` +
         ` applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">${al}</xf>`);
@@ -198,12 +199,29 @@ function tableSheet(m, st) {
 const statusLabel = (s) => String(s || "").replace(/^\s*\d+\s*-\s*/, "");
 const asNumber = (v) => (/^\s*-?\d+(?:[.,]\d+)?\s*$/.test(String(v)) ? Number(String(v).replace(",", ".")) : null);
 
+/** «27,34%» → { value: 0.2734, fmt: "0.00%" }; иначе null. */
+function asPercent(v) {
+  const m = /^\s*(-?\d+)(?:[.,](\d+))?\s*%\s*$/.exec(String(v || ""));
+  if (!m) return null;
+  const dec = m[2] ? m[2].length : 0;
+  return { value: Number(`${m[1]}.${m[2] || "0"}`) / 100, fmt: dec ? `0.${"0".repeat(dec)}%` : "0%" };
+}
+
+/**
+ * Лист «Сводка»: заголовок книги и блоки шапки сверху вниз — показатели, списки, таблицы,
+ * матрица статусов, отбор (диаграммы в книге нет).
+ */
 function summarySheet(m, st) {
-  const hdr = m.hdr;
-  const periods = hdr ? hdr.p : [];
-  const width = Math.max(5, 1 + 2 * (periods.length + 1));      // столбцов: статус + пары МКД/ВР (не меньше A:E)
+  const blocks = (m.blocks || []).filter((b) => (b.type === "filters" ? m.showFilters : m.showSummary));
+  // ширина листа в столбцах: матрица статусов, самая широкая таблица, не меньше A:E
+  let width = 5;
+  for (const b of blocks) {
+    if (b.type === "status") width = Math.max(width, 1 + 2 * (b.p.length + 1));
+    if (b.type === "table") width = Math.max(width, b.h.length, ...b.rows.map((r) => r.cells.length), b.total ? b.total.length : 0);
+  }
   const rows = [];
   const merges = [];
+  const colText = Array.from({ length: width }, () => []);   // тексты по столбцам — для ширин
   let r = 0;
   const row = (cells, ht) => { r++; rows.push(`<row r="${r}"${ht ? ` ht="${ht}" customHeight="1"` : ""}>${cells(r)}</row>`); };
   const blank = () => { r++; };
@@ -213,6 +231,15 @@ function summarySheet(m, st) {
     let x = value === "" ? emptyCell(`${colName(c0)}${q}`, s) : strCell(`${colName(c0)}${q}`, s, value);
     for (let c = c0 + 1; c <= c1; c++) x += emptyCell(`${colName(c)}${q}`, s);
     return x;
+  };
+  /** Ячейка значения: целое — числом, «NN,NN%» — процентом, иначе текст. */
+  const valueCell = (ref, style, v) => {
+    if (v === undefined || v === null || v === "") return emptyCell(ref, style({}));
+    const num = asNumber(v);
+    if (num !== null) return numCell(ref, style({ fmt: "0" }), num);
+    const pct = asPercent(v);
+    if (pct) return numCell(ref, style({ fmt: pct.fmt }), pct.value);
+    return strCell(ref, style({}), v);
   };
 
   const title = st.xf({ font: 2, border: false, v: "" });
@@ -227,75 +254,103 @@ function summarySheet(m, st) {
   row((q) => strCell(`A${q}`, muted, "Сформировано") + strCell(`B${q}`, bold, m.created));
   row((q) => strCell(`A${q}`, muted, "Строк в таблице") + numCell(`B${q}`, st.xf({ font: 1, border: false, v: "", fmt: "#,##0", h: "left" }), m.rows));
 
-  if (hdr && m.showSummary && hdr.k.length) {
-    blank();
-    row((q) => strCell(`A${q}`, band, m.sumTitle || "Показатели") + span(q, 1, 4, band, ""));
-    const label = st.xf({ font: 3 });
-    const value = st.xf({ font: 1 });
-    for (const [l, v] of hdr.k) row((q) => strCell(`A${q}`, label, l) + span(q, 1, 4, value, v));
-  }
+  for (const b of blocks) {
+    if (b.type === "kpi" && b.k.length) {
+      blank();
+      row((q) => span(q, 0, 4, band, b.title || "Показатели"));
+      const label = st.xf({ font: 3 });
+      const value = st.xf({ font: 1 });
+      for (const [l, v] of b.k) { colText[0].push(l); row((q) => strCell(`A${q}`, label, l) + span(q, 1, 4, value, v)); }
+    }
 
-  if (hdr && m.showSummary && hdr.s.length) {
-    blank();
-    row((q) => strCell(`A${q}`, st.xf({ font: 1, border: false, v: "" }), "Статусы по периодам КП"));
-    const th = st.xf({ font: 1, h: "center" });
-    const heads = periods.concat(["Всего"]);
-    let top = 0;
-    row((q) => {
-      top = q;
-      let x = strCell(`A${q}`, th, "Статус");
-      heads.forEach((p, i) => {
-        const a = colName(1 + 2 * i), b = colName(2 + 2 * i);
-        x += strCell(`${a}${q}`, th, p) + emptyCell(`${b}${q}`, th);
-        merges.push(`${a}${q}:${b}${q}`);
-      });
-      return x;
-    });
-    row((q) => emptyCell(`A${q}`, th) + heads.map((_, i) => strCell(`${colName(1 + 2 * i)}${q}`, th, "МКД") + strCell(`${colName(2 + 2 * i)}${q}`, th, "ВР")).join(""));
-    merges.push(`A${top}:A${top + 1}`);
-    for (const rec of hdr.s) {
-      const [color, lab, ...vals] = rec;
-      const total = !color && lab === "Всего";
+    if (b.type === "list" && b.w.length) {
+      blank();
+      if (b.note) { colText[0].push(b.title); row((q) => strCell(`A${q}`, band, b.title) + span(q, 1, 2, bandRight, b.note)); }
+      else row((q) => span(q, 0, 2, band, b.title));               // заголовок на всю ширину блока — не обрезается
+      const name = st.xf({});
+      const sub = st.xf({ indent: 1 });
+      for (const [l, v] of b.w) {
+        const isSub = /^\s*-\s+/.test(l || "");
+        const text = isSub ? l.replace(/^\s*-\s+/, "") : l;
+        colText[0].push(text);
+        row((q) => {
+          merges.push(`B${q}:C${q}`);
+          return strCell(`A${q}`, isSub ? sub : name, text) +
+            valueCell(`B${q}`, (o) => st.xf({ font: 1, h: "right", ...o }), v) + emptyCell(`C${q}`, st.xf({ font: 1, h: "right" }));
+        });
+      }
+    }
+
+    if (b.type === "table" && (b.rows.length || b.total)) {
+      const n = Math.max(b.h.length, ...b.rows.map((x) => x.cells.length), b.total ? b.total.length : 0);
+      blank();
+      if (b.title) row((q) => (n > 1 ? span(q, 0, n - 1, band, b.title) : strCell(`A${q}`, band, b.title)));
+      if (b.h.length) {
+        const th = st.xf({ font: 1, h: "center", wrap: true });
+        b.h.forEach((h, j) => { for (const word of String(h || "").split(/\s+/)) colText[j].push(word); });   // слово заголовка не рвётся
+        row((q) => Array.from({ length: n }, (_, j) => strCell(`${colName(j)}${q}`, th, b.h[j] || "")).join(""), 26);
+      }
+      const fills = Array.from({ length: n }, (_, j) => { const mm = /(#[0-9a-f]{6})/i.exec(b.x[j] || ""); return mm && !/bar/i.test(b.x[j]) ? mm[1] : ""; });
+      const bodyRow = (cells, rowColor, total) => row((q) => Array.from({ length: n }, (_, j) => {
+        const v = cells[j];
+        if (j === 0) { colText[0].push(String(v || "")); return strCell(`A${q}`, st.xf({ font: total ? 1 : 0, fill: total ? HEAD_FILL : rowColor }), v || ""); }
+        colText[j].push(String(v || ""));
+        return valueCell(`${colName(j)}${q}`, (o) => st.xf({ font: total ? 1 : 0, fill: total ? HEAD_FILL : fills[j], h: "right", ...o }), v);
+      }).join(""));
+      for (const x of b.rows) bodyRow(x.cells, x.color, false);
+      if (b.total) bodyRow(b.total, "", true);
+    }
+
+    if (b.type === "status" && b.s.length) {
+      const periods = b.p;
+      blank();
+      row((q) => strCell(`A${q}`, st.xf({ font: 1, border: false, v: "" }), b.title || "Статусы по периодам КП"));
+      const th = st.xf({ font: 1, h: "center" });
+      const heads = periods.concat(["Всего"]);
+      let top = 0;
       row((q) => {
-        const labStyle = total ? st.xf({ font: 1, fill: HEAD_FILL }) : st.xf({ fill: color });
-        let x = strCell(`A${q}`, labStyle, statusLabel(lab));
-        vals.forEach((v, i) => {
-          const isVr = i % 2 === 1;
-          const isAll = i >= vals.length - 2;
-          const fill = total ? HEAD_FILL : !isVr && v !== "" ? color : "";
-          const s = st.xf({ font: total || isAll ? 1 : 0, fill, h: "right", fmt: "0" });
-          const ref = `${colName(1 + i)}${q}`;
-          const num = asNumber(v);
-          x += v === "" ? emptyCell(ref, s) : num !== null ? numCell(ref, s, num) : strCell(ref, s, v);
+        top = q;
+        let x = strCell(`A${q}`, th, "Статус");
+        heads.forEach((h, i) => {
+          const c1 = colName(1 + 2 * i), c2 = colName(2 + 2 * i);
+          x += strCell(`${c1}${q}`, th, h) + emptyCell(`${c2}${q}`, th);
+          merges.push(`${c1}${q}:${c2}${q}`);
         });
         return x;
       });
+      row((q) => emptyCell(`A${q}`, th) + heads.map((_, i) => strCell(`${colName(1 + 2 * i)}${q}`, th, "МКД") + strCell(`${colName(2 + 2 * i)}${q}`, th, "ВР")).join(""));
+      merges.push(`A${top}:A${top + 1}`);
+      for (const rec of b.s) {
+        const [color, lab, ...vals] = rec;
+        const total = !color && lab === "Всего";
+        colText[0].push(statusLabel(lab));
+        row((q) => {
+          const labStyle = total ? st.xf({ font: 1, fill: HEAD_FILL }) : st.xf({ fill: color });
+          let x = strCell(`A${q}`, labStyle, statusLabel(lab));
+          vals.forEach((v, i) => {
+            const isVr = i % 2 === 1;
+            const isAll = i >= vals.length - 2;
+            const fill = total ? HEAD_FILL : !isVr && v !== "" ? color : "";
+            const s = st.xf({ font: total || isAll ? 1 : 0, fill, h: "right", fmt: "0" });
+            const ref = `${colName(1 + i)}${q}`;
+            const num = asNumber(v);
+            x += v === "" ? emptyCell(ref, s) : num !== null ? numCell(ref, s, num) : strCell(ref, s, v);
+          });
+          return x;
+        });
+      }
+    }
+
+    if (b.type === "filters" && b.f.length) {
+      blank();
+      row((q) => span(q, 0, 4, band, "Отбор"));
+      const label = st.xf({ font: 1, border: false, v: "" });
+      for (const [l, v] of b.f) row((q) => strCell(`A${q}`, label, l) + strCell(`B${q}`, plain, v));
     }
   }
 
-  if (hdr && m.showSummary && hdr.w.length) {
-    blank();
-    row((q) => strCell(`A${q}`, band, "Виды работ") + span(q, 1, 2, bandRight, "МКД (ВР/лифтов)"));
-    const name = st.xf({});
-    const value = st.xf({ font: 1, h: "right", fmt: "0" });
-    for (const [l, v] of hdr.w) {
-      const num = asNumber(v);
-      row((q) => {
-        merges.push(`B${q}:C${q}`);
-        return strCell(`A${q}`, name, l) + (num !== null ? numCell(`B${q}`, value, num) : strCell(`B${q}`, value, v)) + emptyCell(`C${q}`, value);
-      });
-    }
-  }
-
-  if (hdr && m.showFilters && hdr.f.length) {
-    blank();
-    row((q) => strCell(`A${q}`, band, "Отбор") + span(q, 1, 4, band, ""));
-    const label = st.xf({ font: 1, border: false, v: "" });
-    for (const [l, v] of hdr.f) row((q) => strCell(`A${q}`, label, l) + strCell(`B${q}`, plain, v));
-  }
-
-  const colsW = [Math.max(30, ...((hdr && hdr.k) || []).map(([l]) => l.length + 2))];
-  for (let j = 1; j < width; j++) colsW.push(9);
+  const colsW = [Math.min(Math.max(30, ...colText[0].map((t) => t.length + 2)), 48)];
+  for (let j = 1; j < width; j++) colsW.push(Math.min(Math.max(9, ...colText[j].map((t) => t.length * 1.05 + 1)), 18));
   return worksheet({ dim: `A1:${colName(width - 1)}${Math.max(r, 1)}`, cols: colsW, rows, merges, landscape: true });
 }
 
@@ -373,7 +428,7 @@ export async function zip(files) {
 
 /**
  * m: { title, subtitle, created, rows, cols (ColumnSpec), values (по столбцам), texts (отформатированные),
- *      rowColors, aligns ("l" | "c" | "r"), hdr, sumTitle, showSummary, showFilters }
+ *      rowColors, aligns ("l" | "c" | "r"), blocks (блоки шапки), showSummary, showFilters }
  */
 export async function buildXlsx(m) {
   const st = new Styles();

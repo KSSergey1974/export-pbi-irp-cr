@@ -107,29 +107,39 @@ body {
 .head__meta dt { color: #d0d0d0; }
 .head__meta dd { margin: 0; font-weight: 700; text-align: right; }
 
-/* Сводка как на дашборде: [показатели + диаграмма] | матрица статусов | виды работ.
-   Показатели и виды работ — по содержимому, матрица забирает остаток ширины */
+/* Сводка: блоки шапки колонками слева направо по ширине содержимого; колонка .grow забирает
+   остаток ширины; что не помещается в ряд, переносится на следующий */
 .summary {
-  display: grid;
-  grid-template-columns: max-content minmax(min-content, 1fr) max-content;
-  grid-template-areas: "pair st vr";
-  align-items: start;       /* высота каждой таблички — по её содержимому */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;  /* высота каждой колонки — по её содержимому */
   gap: 3mm;
   margin: 3mm 0 0;
   break-inside: avoid;
 }
 
-/* Показатели и диаграмма — пара одной высоты: рамка диаграммы тянется до высоты показателей */
+.summary__col {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;   /* блоки с флагом below — друг под другом, одной ширины */
+  gap: 3mm;
+}
+
+.summary__col.grow { flex: 1 1 0; }
+
+/* Блоки с флагом fill: колонка тянется до высоты ряда, блок — до низа колонки, строки таблицы
+   растягиваются. Нижние границы таких блоков оказываются на одном уровне */
+.summary__col.fill { align-self: stretch; }
+.summary__col.fill > .card.fill { flex: 1 1 auto; display: flex; flex-direction: column; }
+.summary__col.fill > .card.fill > table { flex: 1 1 auto; }
+
+/* Блок и диаграмма — пара одной высоты: рамка диаграммы тянется до высоты соседа */
 .summary__pair {
-  grid-area: pair;
   display: grid;
   grid-template-columns: max-content max-content;
   align-items: stretch;
   gap: 3mm;
 }
-
-.card--st { grid-area: st; }
-.card--vr { grid-area: vr; }
 
 .card {
   border: 0.3mm solid var(--rule);
@@ -155,12 +165,6 @@ body {
 
 .card h2 .note {
   white-space: nowrap;      /* шрифт и начертание — как у заголовка таблички */
-}
-
-/* A4 книжная: в ряд не помещается — матрица статусов уходит во второй ряд на всю ширину */
-.doc[data-paper="A4P"] .summary {
-  grid-template-columns: max-content minmax(0, 1fr);
-  grid-template-areas: "pair vr" "st st";
 }
 
 .card--pie {
@@ -208,6 +212,8 @@ body {
   font-size: 8pt;
 }
 
+.kt--list td.kt__sub { padding-left: 5mm; }      /* вложенный пункт списка */
+
 .kt--list td.kt__num {
   text-align: right;
   font-weight: 700;
@@ -233,6 +239,10 @@ body {
 }
 
 .st th { background: #ffffff; font-weight: 700; text-align: center; }
+
+/* Таблицы шапки общего вида (блок table): ширина столбцов по содержимому, заголовки переносятся */
+.st.st--auto { table-layout: auto; }
+.st.st--auto th { white-space: normal; vertical-align: middle; }
 .st td.st__label { text-align: left; }
 .st tr.st__total td { background: var(--head); font-weight: 700; }
 .st td.st__all { font-weight: 700; }
